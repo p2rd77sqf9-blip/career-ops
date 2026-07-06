@@ -56,8 +56,13 @@ Pressing **keyframe** injects a clean frame (an I-frame), resetting the smear.
 | `mosh` (M) | Toggle moshing on/off |
 | `glitch` (G) | 12-frame burst of random block vectors (blocky tearing) |
 | `orb` (O) | 360° tiny-planet view — wraps the moshed video around a circle (seamless mirror wrap) |
+| `scan` (H) | Futuristic face-scan HUD: corner brackets, sweeping scanline, feature boxes with leader lines and live readouts (position/size/motion vectors are real tracker data) |
+| `dissect` (D) | Isolates your eyes and mouth, spins each at a different speed with a size pulse — composited into the mosh so they smear and work inside the orb |
 | orb warp | Radial curve of the orb — low = rim-heavy fisheye, high = pinched center |
 | orb spin | Continuous rotation speed (revolutions/s, negative = counter-clockwise) |
+| feature spin | Speed multiplier for dissect's spinning features |
+
+Face tracking is done fully locally by an embedded copy of [pico.js](https://github.com/nenadmarkus/picojs) (MIT) with the `facefinder` cascade — no models are downloaded, nothing leaves your machine. Eye/mouth positions are estimated from the face box geometry, so they work best facing the camera roughly straight on.
 | block size | Size of the motion blocks — small = fluid, large = chunky |
 | smear | Motion vector multiplier — above 1 exaggerates movement |
 | fresh pixels | How much real image bleeds back per frame (0 = pure smear soup) |
