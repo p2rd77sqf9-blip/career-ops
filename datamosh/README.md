@@ -1,16 +1,41 @@
 # webcam datamosher
 
-Live datamosh / glitch video from your webcam. Single HTML file, no dependencies, everything runs locally in the browser — no frames ever leave your machine.
+Live datamosh / glitch video from your webcam. Everything runs locally — no frames ever leave your machine.
 
-## Run it
+## Launch as a desktop app
 
-`getUserMedia` needs a secure context, so open it via localhost (not `file://`):
+**Easiest — double-click launcher (zero install if you have Chrome/Edge/Brave):**
 
 ```bash
-npx serve datamosh          # or: python3 -m http.server 8080 -d datamosh
+node datamosh/serve.mjs
 ```
 
-Then open http://localhost:8080 (port varies by server) and allow camera access.
+This starts a local server and opens the mosher in a chromeless app window (its own window, no browser tabs or URL bar). Closing the window quits it. It auto-detects Chrome, Chromium, Edge, or Brave; override with `CHROME_PATH=/path/to/browser`. No Chromium-family browser found → it opens your default browser instead.
+
+**Real desktop app (Electron):**
+
+- macOS/Linux: double-click **`Start Datamosher.command`** (or run it from a terminal)
+- Windows: double-click **`Start Datamosher.bat`**
+
+The first run installs Electron (~1 minute, needs Node.js + internet); after that it launches instantly as a native window with proper camera-permission prompts. Equivalent to:
+
+```bash
+cd datamosh && npm install && npm start
+```
+
+**Package it into a standalone .app / .exe / AppImage** (no Node needed to run the result):
+
+```bash
+cd datamosh && npm install && npx electron-builder
+```
+
+The installable app lands in `datamosh/dist/`.
+
+**Plain browser fallback** — `getUserMedia` needs a secure context, so serve over localhost (not `file://`):
+
+```bash
+python3 -m http.server 8080 -d datamosh   # then open http://localhost:8080
+```
 
 ## How it works
 
