@@ -55,6 +55,9 @@ Pressing **keyframe** injects a clean frame (an I-frame), resetting the smear.
 | `keyframe` (Space) | Reset to a clean frame |
 | `mosh` (M) | Toggle moshing on/off |
 | `glitch` (G) | 12-frame burst of random block vectors (blocky tearing) |
+| `orb` (O) | 360° tiny-planet view — wraps the moshed video around a circle (seamless mirror wrap) |
+| orb warp | Radial curve of the orb — low = rim-heavy fisheye, high = pinched center |
+| orb spin | Continuous rotation speed (revolutions/s, negative = counter-clockwise) |
 | block size | Size of the motion blocks — small = fluid, large = chunky |
 | smear | Motion vector multiplier — above 1 exaggerates movement |
 | fresh pixels | How much real image bleeds back per frame (0 = pure smear soup) |
