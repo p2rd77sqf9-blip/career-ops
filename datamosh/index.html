@@ -1,0 +1,442 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>webcam datamosher</title>
+<style>
+  :root {
+    --bg: #0b0b0e;
+    --panel: #16161c;
+    --ink: #d7d7e0;
+    --dim: #7a7a88;
+    --accent: #7cf2c0;
+    --hot: #ff5f8f;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--ink);
+    font: 13px/1.5 ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+    display: flex;
+    min-height: 100vh;
+  }
+  #stage {
+    flex: 1;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 16px;
+    min-width: 0;
+  }
+  canvas#out {
+    max-width: 100%;
+    max-height: calc(100vh - 32px);
+    background: #000;
+    image-rendering: pixelated;
+    box-shadow: 0 0 60px rgba(0,0,0,.8);
+  }
+  #panel {
+    width: 280px;
+    flex: none;
+    background: var(--panel);
+    padding: 16px;
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+    overflow-y: auto;
+  }
+  h1 {
+    font-size: 14px;
+    margin: 0;
+    letter-spacing: .08em;
+    color: var(--accent);
+  }
+  h1 small { color: var(--dim); font-weight: normal; letter-spacing: 0; }
+  .ctl label {
+    display: flex;
+    justify-content: space-between;
+    color: var(--dim);
+    margin-bottom: 2px;
+  }
+  .ctl label output { color: var(--ink); }
+  input[type=range] {
+    width: 100%;
+    accent-color: var(--accent);
+  }
+  .row { display: flex; gap: 8px; flex-wrap: wrap; }
+  button {
+    flex: 1;
+    background: #23232c;
+    color: var(--ink);
+    border: 1px solid #33333f;
+    border-radius: 4px;
+    padding: 7px 8px;
+    font: inherit;
+    cursor: pointer;
+    white-space: nowrap;
+  }
+  button:hover { border-color: var(--accent); color: var(--accent); }
+  button.active { background: var(--accent); color: #000; border-color: var(--accent); }
+  button.rec.active { background: var(--hot); border-color: var(--hot); animation: blink 1s steps(2) infinite; }
+  @keyframes blink { 50% { opacity: .55; } }
+  .check { display: flex; align-items: center; gap: 8px; color: var(--dim); cursor: pointer; }
+  .check input { accent-color: var(--accent); }
+  #status { color: var(--dim); min-height: 1.5em; }
+  #err {
+    color: var(--hot);
+    display: none;
+    white-space: pre-wrap;
+  }
+  .keys { color: var(--dim); border-top: 1px solid #2a2a33; padding-top: 10px; }
+  .keys b { color: var(--ink); font-weight: normal; background: #23232c; padding: 0 5px; border-radius: 3px; }
+</style>
+</head>
+<body>
+<div id="stage"><canvas id="out"></canvas></div>
+
+<div id="panel">
+  <h1>DATAMOSHER <small>/ webcam</small></h1>
+  <div id="err"></div>
+
+  <div class="row">
+    <button id="keyBtn" title="Reset to a clean frame (I-frame)">keyframe</button>
+    <button id="moshBtn" class="active" title="Toggle moshing on/off">mosh</button>
+    <button id="glitchBtn" title="Burst of random block vectors">glitch</button>
+  </div>
+
+  <div class="ctl">
+    <label>block size <output id="blockV">24</output></label>
+    <input type="range" id="block" min="8" max="64" step="4" value="24">
+  </div>
+  <div class="ctl">
+    <label>smear <output id="smearV">1.4</output></label>
+    <input type="range" id="smear" min="0" max="4" step="0.1" value="1.4">
+  </div>
+  <div class="ctl">
+    <label>fresh pixels <output id="bleedV">0.06</output></label>
+    <input type="range" id="bleed" min="0" max="0.5" step="0.01" value="0.06">
+  </div>
+  <div class="ctl">
+    <label>chaos <output id="chaosV">0.00</output></label>
+    <input type="range" id="chaos" min="0" max="1" step="0.01" value="0">
+  </div>
+  <div class="ctl">
+    <label>auto keyframe (s) <output id="autoKeyV">off</output></label>
+    <input type="range" id="autoKey" min="0" max="30" step="1" value="0">
+  </div>
+
+  <label class="check"><input type="checkbox" id="mirror" checked> mirror</label>
+
+  <div class="row">
+    <button id="recBtn" class="rec">&#9679; record</button>
+    <button id="snapBtn">snapshot</button>
+  </div>
+
+  <div id="status">starting camera…</div>
+
+  <div class="keys">
+    <b>space</b> keyframe &nbsp; <b>M</b> mosh &nbsp; <b>G</b> glitch<br>
+    <b>R</b> record &nbsp; <b>S</b> snapshot
+  </div>
+</div>
+
+<script>
+'use strict';
+
+// ---------- state / params ----------
+const P = {
+  block: 24,     // block size in display px
+  smear: 1.4,    // motion vector multiplier
+  bleed: 0.06,   // fraction of real frame blended back each frame
+  chaos: 0,      // sustained random block corruption 0..1
+  autoKey: 0,    // seconds between automatic keyframes (0 = off)
+  mirror: true,
+  mosh: true,
+};
+
+const MW = 160;              // motion-estimation width (small grayscale grid)
+const SEARCH = 7;            // block-match search radius (small-grid px)
+const ZERO_BIAS = 2;         // SAD penalty per px of vector length (favors stillness)
+
+let W = 640, H = 480, MH = 120;
+let video, camReady = false;
+let needKeyframe = true;
+let glitchFrames = 0;
+let lastKeyTime = 0;
+
+// canvases
+const out = document.getElementById('out');       // visible
+const octx = out.getContext('2d');
+let fb = document.createElement('canvas');        // feedback buffer (the moshed image lives here)
+let tmp = document.createElement('canvas');       // scratch for block displacement
+let fctx = fb.getContext('2d');
+let tctx = tmp.getContext('2d');
+const small = document.createElement('canvas');   // downscaled frame for motion estimation
+const sctx = small.getContext('2d', { willReadFrequently: true });
+
+// motion grids
+let grayCur, grayPrev, vectors;
+
+// ---------- UI wiring ----------
+const $ = id => document.getElementById(id);
+const status = $('status');
+
+function bindSlider(id, key, fmt) {
+  const el = $(id), lab = $(id + 'V');
+  el.addEventListener('input', () => {
+    P[key] = parseFloat(el.value);
+    lab.textContent = fmt ? fmt(P[key]) : P[key];
+  });
+  P[key] = parseFloat(el.value);
+  lab.textContent = fmt ? fmt(P[key]) : P[key];
+}
+bindSlider('block', 'block');
+bindSlider('smear', 'smear', v => v.toFixed(1));
+bindSlider('bleed', 'bleed', v => v.toFixed(2));
+bindSlider('chaos', 'chaos', v => v.toFixed(2));
+bindSlider('autoKey', 'autoKey', v => v === 0 ? 'off' : v + 's');
+
+$('mirror').addEventListener('change', e => { P.mirror = e.target.checked; needKeyframe = true; });
+
+$('keyBtn').addEventListener('click', () => { needKeyframe = true; });
+$('glitchBtn').addEventListener('click', () => { glitchFrames = 12; });
+$('moshBtn').addEventListener('click', () => {
+  P.mosh = !P.mosh;
+  $('moshBtn').classList.toggle('active', P.mosh);
+});
+
+$('snapBtn').addEventListener('click', snapshot);
+$('recBtn').addEventListener('click', toggleRecord);
+
+addEventListener('keydown', e => {
+  if (e.target.tagName === 'INPUT' && e.target.type !== 'range') return;
+  switch (e.code) {
+    case 'Space': e.preventDefault(); needKeyframe = true; break;
+    case 'KeyM': $('moshBtn').click(); break;
+    case 'KeyG': glitchFrames = 12; break;
+    case 'KeyR': toggleRecord(); break;
+    case 'KeyS': snapshot(); break;
+  }
+});
+
+// ---------- camera ----------
+async function startCamera() {
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({
+      video: { width: { ideal: 960 }, height: { ideal: 540 } },
+      audio: false,
+    });
+    video = document.createElement('video');
+    video.srcObject = stream;
+    video.muted = true;
+    video.playsInline = true;
+    await video.play();
+    setupSizes(video.videoWidth || 640, video.videoHeight || 480);
+    camReady = true;
+    status.textContent = W + '×' + H;
+  } catch (err) {
+    const box = $('err');
+    box.style.display = 'block';
+    box.textContent = 'camera error: ' + err.message +
+      '\n\nServe over https or localhost and allow camera access.';
+    status.textContent = 'no camera';
+  }
+}
+
+function setupSizes(w, h) {
+  W = w; H = h;
+  MH = Math.round(MW * H / W);
+  out.width = fb.width = tmp.width = W;
+  out.height = fb.height = tmp.height = H;
+  small.width = MW; small.height = MH;
+  grayCur = new Uint8ClampedArray(MW * MH);
+  grayPrev = new Uint8ClampedArray(MW * MH);
+  needKeyframe = true;
+}
+
+// draw current webcam frame onto a context, honoring mirror
+function drawFrame(ctx, alpha) {
+  ctx.save();
+  ctx.globalAlpha = alpha;
+  if (P.mirror) { ctx.translate(W, 0); ctx.scale(-1, 1); }
+  ctx.drawImage(video, 0, 0, W, H);
+  ctx.restore();
+}
+
+// ---------- motion estimation (block matching on small grayscale) ----------
+function readGray(dst) {
+  sctx.save();
+  if (P.mirror) { sctx.translate(MW, 0); sctx.scale(-1, 1); }
+  sctx.drawImage(video, 0, 0, MW, MH);
+  sctx.restore();
+  const d = sctx.getImageData(0, 0, MW, MH).data;
+  for (let i = 0, j = 0; j < dst.length; i += 4, j++) {
+    dst[j] = (d[i] * 3 + d[i + 1] * 4 + d[i + 2]) >> 3;
+  }
+}
+
+// For each block of the CURRENT frame, find where it was in the PREVIOUS
+// frame. Returns vectors in small-grid units: block came from (x+vx, y+vy).
+function estimateMotion(B) {
+  const bx = Math.ceil(MW / B), by = Math.ceil(MH / B);
+  if (!vectors || vectors.length !== bx * by * 2) vectors = new Int8Array(bx * by * 2);
+  let vi = 0;
+  for (let gy = 0; gy < by; gy++) {
+    const y0 = gy * B, bh = Math.min(B, MH - y0);
+    for (let gx = 0; gx < bx; gx++) {
+      const x0 = gx * B, bw = Math.min(B, MW - x0);
+      let best = Infinity, bvx = 0, bvy = 0;
+      for (let dy = -SEARCH; dy <= SEARCH; dy++) {
+        const sy = y0 + dy;
+        if (sy < 0 || sy + bh > MH) continue;
+        for (let dx = -SEARCH; dx <= SEARCH; dx++) {
+          const sx = x0 + dx;
+          if (sx < 0 || sx + bw > MW) continue;
+          let sad = (Math.abs(dx) + Math.abs(dy)) * ZERO_BIAS;
+          for (let y = 0; y < bh; y += 2) {
+            const rc = (y0 + y) * MW + x0;
+            const rp = (sy + y) * MW + sx;
+            for (let x = 0; x < bw; x += 2) {
+              sad += Math.abs(grayCur[rc + x] - grayPrev[rp + x]);
+              if (sad >= best) { x = bw; y = bh; } // early out
+            }
+          }
+          if (sad < best) { best = sad; bvx = dx; bvy = dy; }
+        }
+      }
+      vectors[vi++] = bvx;
+      vectors[vi++] = bvy;
+    }
+  }
+  return { bx, by };
+}
+
+// ---------- render loop ----------
+let frames = 0, lastFps = performance.now();
+
+function tick(now) {
+  requestAnimationFrame(tick);
+  if (!camReady || video.readyState < 2) return;
+
+  const autoDue = P.autoKey > 0 && now - lastKeyTime > P.autoKey * 1000;
+  if (needKeyframe || autoDue || !P.mosh) {
+    drawFrame(fctx, 1);
+    readGray(grayPrev);
+    needKeyframe = false;
+    lastKeyTime = now;
+  } else {
+    mosh();
+  }
+
+  octx.drawImage(fb, 0, 0);
+
+  frames++;
+  if (now - lastFps > 1000) {
+    status.textContent = W + '×' + H + ' · ' + frames + ' fps' +
+      (recorder ? ' · REC' : '');
+    frames = 0;
+    lastFps = now;
+  }
+}
+
+function mosh() {
+  readGray(grayCur);
+
+  // block size in small-grid units (>= 2)
+  const B = Math.max(2, Math.round(P.block * MW / W));
+  const { bx, by } = estimateMotion(B);
+  const s = W / MW; // small-grid -> display scale
+
+  // start from the previous feedback image, then pull each block from
+  // wherever it "came from" — this is what propagates the smear
+  tctx.drawImage(fb, 0, 0);
+  const burst = glitchFrames > 0;
+  if (burst) glitchFrames--;
+
+  let vi = 0;
+  for (let gy = 0; gy < by; gy++) {
+    for (let gx = 0; gx < bx; gx++) {
+      let vx = vectors[vi++] * P.smear;
+      let vy = vectors[vi++] * P.smear;
+      if (burst && Math.random() < 0.35) {
+        vx += (Math.random() - 0.5) * 40;
+        vy += (Math.random() - 0.5) * 40;
+      }
+      if (P.chaos > 0 && Math.random() < P.chaos * 0.15) {
+        vx += (Math.random() - 0.5) * P.chaos * 60;
+        vy += (Math.random() - 0.5) * P.chaos * 60;
+      }
+      if (vx === 0 && vy === 0) continue; // block already correct in tmp
+
+      const dw = Math.min(B, MW - gx * B) * s;
+      const dh = Math.min(B, MH - gy * B) * s;
+      const dx = gx * B * s;
+      const dy = gy * B * s;
+      // clamp source rect inside the buffer so drawImage never distorts
+      const sx = Math.max(0, Math.min(W - dw, dx + vx * s));
+      const sy = Math.max(0, Math.min(H - dh, dy + vy * s));
+      tctx.drawImage(fb, sx, sy, dw, dh, dx, dy, dw, dh);
+    }
+  }
+
+  // swap: tmp becomes the new feedback buffer
+  [fb, tmp] = [tmp, fb];
+  [fctx, tctx] = [tctx, fctx];
+
+  // bleed a little of the real frame back in so residual detail accumulates
+  if (P.bleed > 0) drawFrame(fctx, P.bleed);
+
+  const t = grayCur; grayCur = grayPrev; grayPrev = t;
+}
+
+// ---------- record / snapshot ----------
+let recorder = null, chunks = [];
+
+function toggleRecord() {
+  if (recorder) {
+    recorder.stop();
+    return;
+  }
+  if (!camReady) return;
+  const stream = out.captureStream(30);
+  const mime = ['video/webm;codecs=vp9', 'video/webm;codecs=vp8', 'video/webm']
+    .find(m => MediaRecorder.isTypeSupported(m)) || '';
+  chunks = [];
+  recorder = new MediaRecorder(stream, mime ? { mimeType: mime, videoBitsPerSecond: 8e6 } : undefined);
+  recorder.ondataavailable = e => { if (e.data.size) chunks.push(e.data); };
+  recorder.onstop = () => {
+    download(new Blob(chunks, { type: 'video/webm' }), 'mosh-' + stamp() + '.webm');
+    recorder = null;
+    $('recBtn').classList.remove('active');
+    $('recBtn').innerHTML = '&#9679; record';
+  };
+  recorder.start();
+  $('recBtn').classList.add('active');
+  $('recBtn').innerHTML = '&#9632; stop';
+}
+
+function snapshot() {
+  if (!camReady) return;
+  out.toBlob(b => download(b, 'mosh-' + stamp() + '.png'), 'image/png');
+}
+
+function download(blob, name) {
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = name;
+  a.click();
+  setTimeout(() => URL.revokeObjectURL(a.href), 10000);
+}
+
+function stamp() {
+  return new Date().toISOString().replace(/[:T]/g, '-').slice(0, 19);
+}
+
+// ---------- go ----------
+startCamera();
+requestAnimationFrame(tick);
+</script>
+</body>
+</html>
