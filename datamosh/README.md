@@ -58,11 +58,18 @@ Pressing **keyframe** injects a clean frame (an I-frame), resetting the smear.
 | `orb` (O) | 360° tiny-planet view — wraps the moshed video around a circle (seamless mirror wrap) |
 | `scan` (H) | Futuristic face-scan HUD: corner brackets, sweeping scanline, feature boxes with leader lines and live readouts (position/size/motion vectors are real tracker data) |
 | `dissect` (D) | Isolates your eyes and mouth, spins each at a different speed with a size pulse — composited into the mosh so they smear and work inside the orb |
+| `precise` (P) | Upgrade face tracking from the fast box detector to true 468-point MediaPipe FaceMesh landmarks (downloads ~4MB once) |
 | orb warp | Radial curve of the orb — low = rim-heavy fisheye, high = pinched center |
 | orb spin | Continuous rotation speed (revolutions/s, negative = counter-clockwise) |
 | feature spin | Speed multiplier for dissect's spinning features |
 
-Face tracking is done fully locally by an embedded copy of [pico.js](https://github.com/nenadmarkus/picojs) (MIT) with the `facefinder` cascade — no models are downloaded, nothing leaves your machine. Eye/mouth positions are estimated from the face box geometry, so they work best facing the camera roughly straight on.
+### Face tracking — two tiers
+
+**Fast tracker (default, always on, fully offline):** an embedded copy of [pico.js](https://github.com/nenadmarkus/picojs) (MIT) with the `facefinder` cascade. No downloads, nothing leaves your machine. It finds the face box; eye/mouth positions are estimated from its geometry, so they're best facing the camera roughly straight on.
+
+**Precise tracker (`precise` button / P):** loads Google [MediaPipe FaceMesh](https://developers.google.com/mediapipe/solutions/vision/face_landmarker) on demand for a true 468-point face mesh. Eyes and mouth are located from their actual landmark contours (with real orientation), so dissect patches and the scan HUD lock onto the real features even at an angle, and the scan HUD overlays the live mesh. This is progressive enhancement: it fetches the runtime + model (~4MB) from a CDN the first time, and if that fails (offline/blocked) it silently falls back to the fast tracker. Because it loads a module + WASM from a CDN, precise mode needs the app served over http/https — use `node serve.mjs`, the Electron launchers, or the hosted link (all of which do). Opened as a bare `file://` page it will fall back to the fast tracker.
+
+Self-host or pin the MediaPipe assets by setting `window.DATAMOSH_MP = { module, wasm, model, version, delegate }` before the app script runs.
 | block size | Size of the motion blocks — small = fluid, large = chunky |
 | smear | Motion vector multiplier — above 1 exaggerates movement |
 | fresh pixels | How much real image bleeds back per frame (0 = pure smear soup) |

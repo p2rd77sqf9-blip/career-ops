@@ -110,7 +110,9 @@
   <div class="row">
     <button id="scanBtn" title="Futuristic face-scan HUD overlay">scan</button>
     <button id="dissectBtn" title="Isolate eyes/mouth and spin them">dissect</button>
+    <button id="preciseBtn" title="Load MediaPipe FaceMesh for true 468-point landmark tracking (downloads ~4MB once)">precise</button>
   </div>
+  <div id="fxStatus" style="color:var(--dim); min-height:1.2em; margin-top:-6px;">tracker: fast (offline)</div>
 
   <div class="ctl">
     <label>block size <output id="blockV">24</output></label>
@@ -179,6 +181,7 @@ const P = {
   orb: false,    // 360 tiny-planet projection
   scan: false,   // face-scan HUD overlay
   dissect: false,// spin isolated facial features
+  precise: false,// use MediaPipe FaceMesh landmarks instead of pico box
 };
 
 const MW = 160;              // motion-estimation width (small grayscale grid)
@@ -253,6 +256,12 @@ $('dissectBtn').addEventListener('click', () => {
   P.dissect = !P.dissect;
   $('dissectBtn').classList.toggle('active', P.dissect);
 });
+$('preciseBtn').addEventListener('click', () => {
+  P.precise = !P.precise;
+  $('preciseBtn').classList.toggle('active', P.precise);
+  if (P.precise) loadMediaPipe();
+  else setFxStatus(mpReady ? 'tracker: fast (FaceMesh idle)' : 'tracker: fast (offline)');
+});
 
 $('snapBtn').addEventListener('click', snapshot);
 $('recBtn').addEventListener('click', toggleRecord);
@@ -266,6 +275,7 @@ addEventListener('keydown', e => {
     case 'KeyO': $('orbBtn').click(); break;
     case 'KeyH': $('scanBtn').click(); break;
     case 'KeyD': $('dissectBtn').click(); break;
+    case 'KeyP': $('preciseBtn').click(); break;
     case 'KeyR': toggleRecord(); break;
     case 'KeyS': snapshot(); break;
   }
@@ -617,7 +627,7 @@ const detCtx = detCanvas.getContext('2d', { willReadFrequently: true });
 const updateMemory = pico.instantiate_detection_memory(4);
 const featSrc = document.createElement('canvas'); // clean mirrored frame for dissect patches
 const featCtx = featSrc.getContext('2d');
-const face = { x: 0, y: 0, s: 0, q: 0, seen: -1e9, visible: false };
+const face = { x: 0, y: 0, s: 0, q: 0, seen: -1e9, visible: false, precise: false, lmPts: null };
 window._face = face; // exposed for debugging
 const SUBJ_ID = (Math.random() * 0xffff | 0).toString(16).toUpperCase().padStart(4, '0');
 
@@ -633,7 +643,119 @@ try {
   console.error('face cascade failed to load:', e);
 }
 
+// ---------- MediaPipe FaceMesh (optional precise 468-point landmarks) ----------
+// Progressive enhancement: lazy-loaded only when the user enables "precise".
+// URLs are overridable via window.DATAMOSH_MP for self-hosting/testing.
+const MP = window.DATAMOSH_MP || {};
+const MP_VERSION = MP.version || '0.10.18';
+const MP_MODULE_URL = MP.module || `https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@${MP_VERSION}/vision_bundle.mjs`;
+const MP_WASM_BASE  = MP.wasm   || `https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@${MP_VERSION}/wasm`;
+const MP_MODEL_URL  = MP.model  || 'https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task';
+
+let faceLandmarker = null, mpReady = false, mpLoading = false, mpTs = 0;
+const mpCanvas = document.createElement('canvas');
+const mpCtx = mpCanvas.getContext('2d', { willReadFrequently: true });
+
+function setFxStatus(t) { const el = $('fxStatus'); if (el) el.textContent = t; }
+
+async function loadMediaPipe() {
+  if (mpReady || mpLoading) { if (mpReady) setFxStatus('tracker: precise FaceMesh ✓'); return; }
+  mpLoading = true;
+  setFxStatus('loading FaceMesh… (~4MB, once)');
+  try {
+    const vision = await import(MP_MODULE_URL);
+    const fileset = await vision.FilesetResolver.forVisionTasks(MP_WASM_BASE);
+    let lastErr;
+    for (const delegate of [MP.delegate || 'GPU', 'CPU']) {
+      try {
+        faceLandmarker = await vision.FaceLandmarker.createFromOptions(fileset, {
+          baseOptions: { modelAssetPath: MP_MODEL_URL, delegate },
+          runningMode: 'VIDEO',
+          numFaces: 1,
+        });
+        lastErr = null;
+        break;
+      } catch (e) { lastErr = e; }
+    }
+    if (lastErr) throw lastErr;
+    mpReady = true;
+    setFxStatus('tracker: precise FaceMesh ✓');
+  } catch (e) {
+    console.error('MediaPipe load failed:', e);
+    mpReady = false;
+    P.precise = false;
+    $('preciseBtn').classList.remove('active');
+    setFxStatus('precise unavailable (offline?) — using fast tracker');
+  } finally {
+    mpLoading = false;
+  }
+}
+
+// FaceMesh landmark index sets (contours + corners for orientation)
+const LM = {
+  leftEye:  [33,246,161,160,159,158,157,173,133,155,154,153,145,144,163,7],
+  rightEye: [263,466,388,387,386,385,384,398,362,382,381,380,374,373,390,249],
+  lips:     [61,185,40,39,37,0,267,269,270,409,291,375,321,405,314,17,84,181,91,146],
+  leftEyeC:  [33,133], rightEyeC: [263,362], mouthC: [61,291],
+};
+
+function ellipseFromLM(pts, idx, corners) {
+  let cx = 0, cy = 0;
+  for (const i of idx) { cx += pts[i].x; cy += pts[i].y; }
+  cx /= idx.length; cy /= idx.length;
+  const a = pts[corners[0]], b = pts[corners[1]];
+  const dx = b.x - a.x, dy = b.y - a.y;
+  const rot = Math.atan2(dy, dx);
+  const rx = Math.max(2, Math.hypot(dx, dy) * 0.5 * 1.3);
+  const nlen = Math.hypot(dx, dy) || 1;
+  let maxp = 0;
+  for (const i of idx) {
+    const proj = Math.abs(((pts[i].x - cx) * -dy + (pts[i].y - cy) * dx) / nlen);
+    if (proj > maxp) maxp = proj;
+  }
+  const ry = Math.max(maxp * 1.4, rx * 0.32);
+  return { cx, cy, rx, ry, rot };
+}
+
+function updateFaceMP(now) {
+  const w = Math.min(W, 640), h = Math.round(w * H / W);
+  if (mpCanvas.width !== w || mpCanvas.height !== h) { mpCanvas.width = w; mpCanvas.height = h; }
+  mpCtx.save();
+  if (P.mirror) { mpCtx.translate(w, 0); mpCtx.scale(-1, 1); }
+  mpCtx.drawImage(video, 0, 0, w, h);
+  mpCtx.restore();
+
+  mpTs = Math.max(mpTs + 1, Math.round(now));
+  let res;
+  try { res = faceLandmarker.detectForVideo(mpCanvas, mpTs); }
+  catch (e) { face.visible = now - face.seen < 700; return; }
+
+  if (res && res.faceLandmarks && res.faceLandmarks.length) {
+    const lm = res.faceLandmarks[0];
+    const pts = new Array(lm.length);
+    let minx = 1e9, miny = 1e9, maxx = -1e9, maxy = -1e9;
+    for (let i = 0; i < lm.length; i++) {
+      const x = lm[i].x * W, y = lm[i].y * H;
+      pts[i] = { x, y };
+      if (x < minx) minx = x; if (x > maxx) maxx = x;
+      if (y < miny) miny = y; if (y > maxy) maxy = y;
+    }
+    face.lmPts = pts;
+    face.precise = true;
+    const cx = (minx + maxx) / 2, cy = (miny + maxy) / 2;
+    const s = Math.max(maxx - minx, maxy - miny) * 1.15;
+    if (face.visible) {
+      face.x += (cx - face.x) * 0.5; face.y += (cy - face.y) * 0.5; face.s += (s - face.s) * 0.5;
+    } else { face.x = cx; face.y = cy; face.s = s; }
+    face.q = 60; // landmark tracking is high-confidence
+    face.seen = now;
+  }
+  face.visible = now - face.seen < 700;
+}
+
 function updateFace(now) {
+  if (P.precise && mpReady) { updateFaceMP(now); return; }
+  face.precise = false; face.lmPts = null;
   if (!classifyRegion) return;
   detH = Math.round(DETW * H / W);
   if (detCanvas.width !== DETW || detCanvas.height !== detH) {
@@ -674,11 +796,19 @@ function updateFace(now) {
 }
 
 function faceFeatures() {
+  if (face.precise && face.lmPts) {
+    const p = face.lmPts;
+    return [
+      { name: 'E1', ...ellipseFromLM(p, LM.leftEye, LM.leftEyeC), speed: 2.2, phase: 0 },
+      { name: 'E2', ...ellipseFromLM(p, LM.rightEye, LM.rightEyeC), speed: -3.0, phase: 2 },
+      { name: 'M0', ...ellipseFromLM(p, LM.lips, LM.mouthC), speed: 1.5, phase: 4 },
+    ];
+  }
   const s = face.s;
   return [
-    { name: 'E1', cx: face.x - 0.17*s, cy: face.y - 0.09*s, rx: 0.11*s, ry: 0.075*s, speed: 2.2, phase: 0 },
-    { name: 'E2', cx: face.x + 0.17*s, cy: face.y - 0.09*s, rx: 0.11*s, ry: 0.075*s, speed: -3.0, phase: 2 },
-    { name: 'M0', cx: face.x, cy: face.y + 0.27*s, rx: 0.17*s, ry: 0.10*s, speed: 1.5, phase: 4 },
+    { name: 'E1', cx: face.x - 0.17*s, cy: face.y - 0.09*s, rx: 0.11*s, ry: 0.075*s, rot: 0, speed: 2.2, phase: 0 },
+    { name: 'E2', cx: face.x + 0.17*s, cy: face.y - 0.09*s, rx: 0.11*s, ry: 0.075*s, rot: 0, speed: -3.0, phase: 2 },
+    { name: 'M0', cx: face.x, cy: face.y + 0.27*s, rx: 0.17*s, ry: 0.10*s, rot: 0, speed: 1.5, phase: 4 },
   ];
 }
 
@@ -694,15 +824,16 @@ function applyDissect(now) {
   featCtx.restore();
 
   for (const f of faceFeatures()) {
+    const rot = f.rot || 0;
     const ang = now / 1000 * f.speed * P.dspeed;
     const pul = 1 + 0.18 * Math.sin(now / 500 + f.phase);
     const R2 = Math.hypot(f.rx, f.ry) * 1.05;
     fctx.save();
     fctx.beginPath();
-    fctx.ellipse(f.cx, f.cy, f.rx * pul, f.ry * pul, 0, 0, Math.PI * 2);
+    fctx.ellipse(f.cx, f.cy, f.rx * pul, f.ry * pul, rot, 0, Math.PI * 2);
     fctx.clip();
     fctx.translate(f.cx, f.cy);
-    fctx.rotate(ang);
+    fctx.rotate(rot + ang);
     fctx.scale(pul, pul);
     fctx.drawImage(featSrc, f.cx - R2, f.cy - R2, 2 * R2, 2 * R2, -R2, -R2, 2 * R2, 2 * R2);
     fctx.restore();
@@ -770,16 +901,27 @@ function drawScanHUD(now) {
   // header
   octx.fillStyle = A + '0.95)';
   const lock = Math.min(99.9, face.q * 1.9).toFixed(1);
-  octx.fillText('SUBJ 0x' + SUBJ_ID + '  LOCK ' + lock + '%', bx, by - 8);
+  octx.fillText('SUBJ 0x' + SUBJ_ID + '  LOCK ' + lock + '%' + (face.precise ? '  MESH468' : ''), bx, by - 8);
 
   // feature boxes + leader lines + labels
+  // faint real face mesh (precise mode only) — makes the scan look genuine
+  if (face.precise && face.lmPts) {
+    const p = face.lmPts;
+    octx.fillStyle = A + '0.45)';
+    for (let i = 0; i < p.length; i += 3) octx.fillRect(p[i].x, p[i].y, 1, 1);
+  }
+
   const feats = faceFeatures();
   octx.strokeStyle = A + '0.7)';
   feats.forEach((f, i) => {
-    const fx = f.cx - f.rx, fy = f.cy - f.ry, fw = 2 * f.rx, fh = 2 * f.ry;
-    octx.strokeRect(fx, fy, fw, fh);
+    const rot = f.rot || 0;
+    octx.save();
+    octx.translate(f.cx, f.cy);
+    octx.rotate(rot);
+    octx.strokeRect(-f.rx, -f.ry, 2 * f.rx, 2 * f.ry);
+    octx.restore();
     const lx = bx + bs + 14, ly = by + 14 + i * 40;
-    octx.beginPath(); octx.moveTo(fx + fw, fy + fh / 2); octx.lineTo(lx - 4, ly - 4); octx.stroke();
+    octx.beginPath(); octx.moveTo(f.cx + f.rx, f.cy); octx.lineTo(lx - 4, ly - 4); octx.stroke();
     octx.fillStyle = A + '0.95)';
     octx.fillText(f.name + ' 0x' + ((prand(t8 + i * 7919) * 0xfff) | 0).toString(16).padStart(3, '0').toUpperCase(), lx, ly);
     octx.fillStyle = A + '0.55)';
