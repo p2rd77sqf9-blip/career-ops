@@ -59,6 +59,10 @@ Pressing **keyframe** injects a clean frame (an I-frame), resetting the smear.
 | `scan` (H) | Futuristic face-scan HUD: corner brackets, sweeping scanline, feature boxes with leader lines and live readouts (position/size/motion vectors are real tracker data) |
 | `dissect` (D) | Isolates your eyes and mouth, spins each at a different speed with a size pulse — composited into the mosh so they smear and work inside the orb |
 | `precise` (P) | Upgrade face tracking from the fast box detector to true 468-point MediaPipe FaceMesh landmarks (downloads ~4MB once) |
+| `react` (T) | Ties glitch intensity to motion — the more your face moves, the more the smear and chaos ramp up, with auto glitch bursts on fast moves. Works with either tracker. |
+| `iris` (I) | Swirls each iris/eye region, spinning fast (precise; uses the iris landmarks) |
+| `swap` (W) | Swaps your eyes and mouth — mouth is composited onto both eyes and an eye onto the mouth (precise) |
+| `+ map a face` | Upload a photo of someone's face and it's warped live onto yours via an 852-triangle FaceMesh mesh (precise). `clear` removes it. |
 | orb warp | Radial curve of the orb — low = rim-heavy fisheye, high = pinched center |
 | orb spin | Continuous rotation speed (revolutions/s, negative = counter-clockwise) |
 | feature spin | Speed multiplier for dissect's spinning features |
@@ -68,6 +72,8 @@ Pressing **keyframe** injects a clean frame (an I-frame), resetting the smear.
 **Fast tracker (default, always on, fully offline):** an embedded copy of [pico.js](https://github.com/nenadmarkus/picojs) (MIT) with the `facefinder` cascade. No downloads, nothing leaves your machine. It finds the face box; eye/mouth positions are estimated from its geometry, so they're best facing the camera roughly straight on.
 
 **Precise tracker (`precise` button / P):** loads Google [MediaPipe FaceMesh](https://developers.google.com/mediapipe/solutions/vision/face_landmarker) on demand for a true 468-point face mesh. Eyes and mouth are located from their actual landmark contours (with real orientation), so dissect patches and the scan HUD lock onto the real features even at an angle, and the scan HUD overlays the live mesh. This is progressive enhancement: it fetches the runtime + model (~4MB) from a CDN the first time, and if that fails (offline/blocked) it silently falls back to the fast tracker. Because it loads a module + WASM from a CDN, precise mode needs the app served over http/https — use `node serve.mjs`, the Electron launchers, or the hosted link (all of which do). Opened as a bare `file://` page it will fall back to the fast tracker.
+
+The `iris`, `swap`, and face-map effects require precise mode and enable it automatically. Face-map builds its warp mesh (852 triangles) from FaceMesh's own tesselation at runtime — no extra assets. Uploaded photos are read locally in the browser and never uploaded anywhere. Mapping is heaviest (per-triangle warp every frame); expect real-time on a GPU, slower on CPU-only machines.
 
 Self-host or pin the MediaPipe assets by setting `window.DATAMOSH_MP = { module, wasm, model, version, delegate }` before the app script runs.
 | block size | Size of the motion blocks — small = fluid, large = chunky |

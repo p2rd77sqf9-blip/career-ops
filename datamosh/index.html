@@ -112,6 +112,19 @@
     <button id="dissectBtn" title="Isolate eyes/mouth and spin them">dissect</button>
     <button id="preciseBtn" title="Load MediaPipe FaceMesh for true 468-point landmark tracking (downloads ~4MB once)">precise</button>
   </div>
+
+  <div class="row">
+    <button id="reactBtn" title="Drive glitch intensity from how much your face moves">react</button>
+    <button id="irisBtn" title="Spin your irises (precise)">iris</button>
+    <button id="swapBtn" title="Swap your eyes and mouth (precise)">swap</button>
+  </div>
+
+  <div class="row">
+    <button id="addFaceBtn" title="Upload a face photo to map onto yours (precise)">+ map a face</button>
+    <button id="clearFaceBtn" title="Remove the mapped face" disabled>clear</button>
+  </div>
+  <input type="file" id="faceFile" accept="image/*" style="display:none">
+
   <div id="fxStatus" style="color:var(--dim); min-height:1.2em; margin-top:-6px;">tracker: fast (offline)</div>
 
   <div class="ctl">
@@ -182,6 +195,10 @@ const P = {
   scan: false,   // face-scan HUD overlay
   dissect: false,// spin isolated facial features
   precise: false,// use MediaPipe FaceMesh landmarks instead of pico box
+  react: false,  // face motion drives mosh intensity
+  iris: false,   // spin the irises (precise)
+  swap: false,   // swap eyes and mouth (precise)
+  faceMap: false,// map an uploaded face onto the live face (precise)
 };
 
 const MW = 160;              // motion-estimation width (small grayscale grid)
@@ -262,6 +279,30 @@ $('preciseBtn').addEventListener('click', () => {
   if (P.precise) loadMediaPipe();
   else setFxStatus(mpReady ? 'tracker: fast (FaceMesh idle)' : 'tracker: fast (offline)');
 });
+$('reactBtn').addEventListener('click', () => {
+  P.react = !P.react;
+  $('reactBtn').classList.toggle('active', P.react);
+});
+// iris and swap need real landmarks — auto-enable precise
+function needPrecise() {
+  if (!P.precise) { P.precise = true; $('preciseBtn').classList.add('active'); }
+  if (!mpReady) loadMediaPipe();
+}
+$('irisBtn').addEventListener('click', () => {
+  P.iris = !P.iris;
+  $('irisBtn').classList.toggle('active', P.iris);
+  if (P.iris) needPrecise();
+});
+$('swapBtn').addEventListener('click', () => {
+  P.swap = !P.swap;
+  $('swapBtn').classList.toggle('active', P.swap);
+  if (P.swap) needPrecise();
+});
+$('addFaceBtn').addEventListener('click', () => $('faceFile').click());
+$('faceFile').addEventListener('change', e => {
+  if (e.target.files && e.target.files[0]) handleFaceUpload(e.target.files[0]);
+});
+$('clearFaceBtn').addEventListener('click', clearFaceMap);
 
 $('snapBtn').addEventListener('click', snapshot);
 $('recBtn').addEventListener('click', toggleRecord);
@@ -276,6 +317,9 @@ addEventListener('keydown', e => {
     case 'KeyH': $('scanBtn').click(); break;
     case 'KeyD': $('dissectBtn').click(); break;
     case 'KeyP': $('preciseBtn').click(); break;
+    case 'KeyT': $('reactBtn').click(); break;
+    case 'KeyI': $('irisBtn').click(); break;
+    case 'KeyW': $('swapBtn').click(); break;
     case 'KeyR': toggleRecord(); break;
     case 'KeyS': snapshot(); break;
   }
@@ -382,6 +426,12 @@ function tick(now) {
   requestAnimationFrame(tick);
   if (!camReady || video.readyState < 2) return;
 
+  // face tracking first, so react can drive this frame's mosh intensity
+  if (P.scan || P.dissect || P.iris || P.swap || P.faceMap || P.react) {
+    updateFace(now);
+    computeFaceMotion(now);
+  }
+
   const autoDue = P.autoKey > 0 && now - lastKeyTime > P.autoKey * 1000;
   if (needKeyframe || autoDue || !P.mosh) {
     drawFrame(fctx, 1);
@@ -392,7 +442,10 @@ function tick(now) {
     mosh();
   }
 
-  if (P.scan || P.dissect) updateFace(now);
+  // face composites paint into the feedback buffer so they mosh + orb
+  if (P.faceMap) drawFaceMap();
+  if (P.swap) applySwap(now);
+  if (P.iris) applyIris(now);
   if (P.dissect) applyDissect(now);
 
   if (P.orb) renderOrb(now);
@@ -412,6 +465,14 @@ function tick(now) {
 function mosh() {
   readGray(grayCur);
 
+  // react: face motion boosts smear + chaos this frame
+  let smear = P.smear, chaosP = P.chaos;
+  if (P.react && face.visible) {
+    const m = face.motion || 0;
+    smear *= 1 + 2.4 * m;
+    chaosP = Math.min(1, chaosP + 0.5 * Math.max(0, m - 0.5));
+  }
+
   // block size in small-grid units (>= 2)
   const B = Math.max(2, Math.round(P.block * MW / W));
   const { bx, by } = estimateMotion(B);
@@ -426,15 +487,15 @@ function mosh() {
   let vi = 0;
   for (let gy = 0; gy < by; gy++) {
     for (let gx = 0; gx < bx; gx++) {
-      let vx = vectors[vi++] * P.smear;
-      let vy = vectors[vi++] * P.smear;
+      let vx = vectors[vi++] * smear;
+      let vy = vectors[vi++] * smear;
       if (burst && Math.random() < 0.35) {
         vx += (Math.random() - 0.5) * 40;
         vy += (Math.random() - 0.5) * 40;
       }
-      if (P.chaos > 0 && Math.random() < P.chaos * 0.15) {
-        vx += (Math.random() - 0.5) * P.chaos * 60;
-        vy += (Math.random() - 0.5) * P.chaos * 60;
+      if (chaosP > 0 && Math.random() < chaosP * 0.15) {
+        vx += (Math.random() - 0.5) * chaosP * 60;
+        vy += (Math.random() - 0.5) * chaosP * 60;
       }
       if (vx === 0 && vy === 0) continue; // block already correct in tmp
 
@@ -627,7 +688,7 @@ const detCtx = detCanvas.getContext('2d', { willReadFrequently: true });
 const updateMemory = pico.instantiate_detection_memory(4);
 const featSrc = document.createElement('canvas'); // clean mirrored frame for dissect patches
 const featCtx = featSrc.getContext('2d');
-const face = { x: 0, y: 0, s: 0, q: 0, seen: -1e9, visible: false, precise: false, lmPts: null };
+const face = { x: 0, y: 0, s: 0, q: 0, seen: -1e9, visible: false, precise: false, lmPts: null, motion: 0 };
 window._face = face; // exposed for debugging
 const SUBJ_ID = (Math.random() * 0xffff | 0).toString(16).toUpperCase().padStart(4, '0');
 
@@ -653,6 +714,7 @@ const MP_WASM_BASE  = MP.wasm   || `https://cdn.jsdelivr.net/npm/@mediapipe/task
 const MP_MODEL_URL  = MP.model  || 'https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task';
 
 let faceLandmarker = null, mpReady = false, mpLoading = false, mpTs = 0;
+let mpVision = null, mpFileset = null, imgLandmarker = null, TRIANGLES = null;
 const mpCanvas = document.createElement('canvas');
 const mpCtx = mpCanvas.getContext('2d', { willReadFrequently: true });
 
@@ -678,6 +740,9 @@ async function loadMediaPipe() {
       } catch (e) { lastErr = e; }
     }
     if (lastErr) throw lastErr;
+    mpVision = vision;
+    mpFileset = fileset;
+    TRIANGLES = buildTriangles(vision.FaceLandmarker.FACE_LANDMARKS_TESSELATION);
     mpReady = true;
     setFxStatus('tracker: precise FaceMesh ✓');
   } catch (e) {
@@ -812,16 +877,190 @@ function faceFeatures() {
   ];
 }
 
+// build triangle index list from the tesselation (groups of 3 directed edges)
+function buildTriangles(tess) {
+  const tris = [];
+  for (let i = 0; i + 2 < tess.length; i += 3) {
+    const a = tess[i], b = tess[i + 1], c = tess[i + 2];
+    if (a.end === b.start && b.end === c.start && c.end === a.start)
+      tris.push([a.start, a.end, b.end]);
+  }
+  return tris;
+}
+
+// clean, mirrored copy of the current frame — drawn at most once per tick,
+// shared by dissect / iris / swap as their patch source
+let _featStamp = -1;
+function ensureFeatSrc() {
+  if (_featStamp === frames) return;
+  if (featSrc.width !== W || featSrc.height !== H) { featSrc.width = W; featSrc.height = H; }
+  featCtx.save();
+  if (P.mirror) { featCtx.translate(W, 0); featCtx.scale(-1, 1); }
+  featCtx.drawImage(video, 0, 0, W, H);
+  featCtx.restore();
+  _featStamp = frames;
+}
+
+// ---------- react: face motion drives intensity ----------
+let _pfx = 0, _pfy = 0, _pfs = 0, _pft = 0, _glCd = 0;
+function computeFaceMotion(now) {
+  if (!face.visible) { face.motion = (face.motion || 0) * 0.9; return; }
+  if (_pft) {
+    const dt = Math.max(0.001, (now - _pft) / 1000);
+    const d = (Math.abs(face.x - _pfx) + Math.abs(face.y - _pfy) + Math.abs(face.s - _pfs)) / Math.max(1, face.s);
+    const inst = Math.min(2, d / dt * 0.18);
+    face.motion = (face.motion || 0) + (inst - (face.motion || 0)) * 0.25;
+  }
+  _pfx = face.x; _pfy = face.y; _pfs = face.s; _pft = now;
+  if (P.react && face.motion > 0.7 && now > _glCd) { glitchFrames = Math.max(glitchFrames, 6); _glCd = now + 250; }
+}
+
+// ---------- iris: spin the irises (precise) ----------
+const IRIS = { left: [468, 469, 470, 471, 472], right: [473, 474, 475, 476, 477] };
+function irisCircle(pts, idx) {
+  const c = pts[idx[0]];
+  let r = 0;
+  for (let k = 1; k < idx.length; k++) r = Math.max(r, Math.hypot(pts[idx[k]].x - c.x, pts[idx[k]].y - c.y));
+  return { cx: c.x, cy: c.y, r: Math.max(3, r) };
+}
+function applyIris(now) {
+  if (!face.precise || !face.lmPts || face.lmPts.length < 478) return;
+  ensureFeatSrc();
+  for (const idx of [IRIS.left, IRIS.right]) {
+    const e = irisCircle(face.lmPts, idx);
+    const ang = now / 1000 * 6 * P.dspeed;
+    const R = e.r * 2.6;                // swirl the eye region around the iris
+    fctx.save();
+    fctx.beginPath();
+    fctx.arc(e.cx, e.cy, e.r * 2.2, 0, Math.PI * 2);
+    fctx.clip();
+    fctx.translate(e.cx, e.cy);
+    fctx.rotate(ang);
+    fctx.drawImage(featSrc, e.cx - R, e.cy - R, 2 * R, 2 * R, -R, -R, 2 * R, 2 * R);
+    fctx.restore();
+  }
+}
+
+// ---------- swap: eyes <-> mouth ----------
+function drawRelocate(src, dst, scale) {
+  const sr = Math.hypot(src.rx, src.ry) * 1.1;
+  fctx.save();
+  fctx.beginPath();
+  fctx.ellipse(dst.cx, dst.cy, dst.rx, dst.ry, dst.rot || 0, 0, Math.PI * 2);
+  fctx.clip();
+  fctx.translate(dst.cx, dst.cy);
+  fctx.rotate(dst.rot || 0);
+  fctx.scale((dst.rx / sr) * scale, (dst.ry / sr) * scale);
+  fctx.rotate(-(src.rot || 0));
+  fctx.drawImage(featSrc, src.cx - sr, src.cy - sr, 2 * sr, 2 * sr, -sr, -sr, 2 * sr, 2 * sr);
+  fctx.restore();
+}
+function applySwap(now) {
+  if (!face.visible || face.s <= 0) return;
+  ensureFeatSrc();
+  const [e1, e2, m0] = faceFeatures();
+  drawRelocate(m0, e1, 1.15);   // mouth -> left eye
+  drawRelocate(m0, e2, 1.15);   // mouth -> right eye
+  drawRelocate(e1, m0, 1.25);   // eye -> mouth
+}
+
+// ---------- face map: warp an uploaded face onto the live face ----------
+const faceMap = { img: null, srcLm: null, name: '' };
+
+function loadImage(file) {
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    img.onload = () => resolve(img);
+    img.onerror = reject;
+    img.src = URL.createObjectURL(file);
+  });
+}
+
+async function detectImageLandmarks(img) {
+  if (!imgLandmarker) {
+    let last;
+    for (const delegate of [MP.delegate || 'GPU', 'CPU']) {
+      try {
+        imgLandmarker = await mpVision.FaceLandmarker.createFromOptions(mpFileset, {
+          baseOptions: { modelAssetPath: MP_MODEL_URL, delegate },
+          runningMode: 'IMAGE', numFaces: 1,
+        });
+        last = null; break;
+      } catch (e) { last = e; }
+    }
+    if (last) throw last;
+  }
+  const res = imgLandmarker.detect(img);
+  if (!res.faceLandmarks || !res.faceLandmarks.length) return null;
+  const w = img.naturalWidth, h = img.naturalHeight;
+  return res.faceLandmarks[0].map(p => ({ x: p.x * w, y: p.y * h }));
+}
+
+async function handleFaceUpload(file) {
+  setFxStatus('loading face image…');
+  try {
+    const img = await loadImage(file);
+    await loadMediaPipe();
+    if (!mpReady) { setFxStatus('face map needs FaceMesh (serve over http / online)'); return; }
+    const lm = await detectImageLandmarks(img);
+    if (!lm) { setFxStatus('no face found in that image — try another'); return; }
+    faceMap.img = img;
+    faceMap.srcLm = lm;
+    faceMap.name = file.name;
+    P.faceMap = true;
+    if (!P.precise) { P.precise = true; $('preciseBtn').classList.add('active'); }
+    $('addFaceBtn').classList.add('active');
+    $('clearFaceBtn').disabled = false;
+    setFxStatus('face mapped: ' + file.name + ' ✓');
+  } catch (e) {
+    console.error(e);
+    setFxStatus('could not map that image');
+  }
+}
+
+function clearFaceMap() {
+  faceMap.img = null; faceMap.srcLm = null; faceMap.name = '';
+  P.faceMap = false;
+  $('addFaceBtn').classList.remove('active');
+  $('clearFaceBtn').disabled = true;
+  setFxStatus(mpReady ? 'tracker: precise FaceMesh ✓' : 'tracker: fast (offline)');
+}
+
+// affine mapping src triangle -> dst triangle: [a,b,c,d,e,f]
+function affineTri(s0, s1, s2, d0, d1, d2) {
+  const denom = (s0.x - s2.x) * (s1.y - s2.y) - (s1.x - s2.x) * (s0.y - s2.y);
+  if (Math.abs(denom) < 1e-6) return null;
+  const a = ((d0.x - d2.x) * (s1.y - s2.y) - (d1.x - d2.x) * (s0.y - s2.y)) / denom;
+  const b = ((d0.y - d2.y) * (s1.y - s2.y) - (d1.y - d2.y) * (s0.y - s2.y)) / denom;
+  const c = ((d1.x - d2.x) * (s0.x - s2.x) - (d0.x - d2.x) * (s1.x - s2.x)) / denom;
+  const d = ((d1.y - d2.y) * (s0.x - s2.x) - (d0.y - d2.y) * (s1.x - s2.x)) / denom;
+  return [a, b, c, d, d2.x - a * s2.x - c * s2.y, d2.y - b * s2.x - d * s2.y];
+}
+
+function drawFaceMap() {
+  if (!faceMap.img || !face.precise || !face.lmPts || !TRIANGLES) return;
+  const S = faceMap.srcLm, D = face.lmPts, img = faceMap.img;
+  for (let t = 0; t < TRIANGLES.length; t++) {
+    const [i, j, k] = TRIANGLES[t];
+    const s0 = S[i], s1 = S[j], s2 = S[k], d0 = D[i], d1 = D[j], d2 = D[k];
+    const m = affineTri(s0, s1, s2, d0, d1, d2);
+    if (!m) continue;
+    fctx.save();
+    fctx.beginPath();
+    fctx.moveTo(d0.x, d0.y); fctx.lineTo(d1.x, d1.y); fctx.lineTo(d2.x, d2.y); fctx.closePath();
+    fctx.clip();
+    fctx.transform(m[0], m[1], m[2], m[3], m[4], m[5]);
+    fctx.drawImage(img, 0, 0);
+    fctx.restore();
+  }
+}
+
 // ---------- dissect: isolate facial features, spin + pulse them ----------
 // Patches are cut from the clean current frame and composited into the
 // feedback buffer, so they live inside the moshed world (and the orb).
 function applyDissect(now) {
   if (!face.visible || face.s <= 0) return;
-  featSrc.width === W || (featSrc.width = W, featSrc.height = H);
-  featCtx.save();
-  if (P.mirror) { featCtx.translate(W, 0); featCtx.scale(-1, 1); }
-  featCtx.drawImage(video, 0, 0, W, H);
-  featCtx.restore();
+  ensureFeatSrc();
 
   for (const f of faceFeatures()) {
     const rot = f.rot || 0;
@@ -934,6 +1173,7 @@ function drawScanHUD(now) {
     'POS ' + (face.x | 0) + ':' + (face.y | 0),
     'SIZ ' + (face.s | 0) + 'px',
     'VEC ' + (mvx >= 0 ? '+' : '') + mvx.toFixed(2) + ' ' + (mvy >= 0 ? '+' : '') + mvy.toFixed(2),
+    'MOT ' + ((face.motion || 0) * 100 | 0) + '%' + (P.react ? ' ▲' : ''),
     'BIO ' + ((prand(t8 * 3.7) * 0xffffff) | 0).toString(16).padStart(6, '0').toUpperCase(),
   ];
   octx.fillStyle = A + '0.55)';
@@ -996,6 +1236,11 @@ function stamp() {
 }
 
 // ---------- go ----------
+window._dbg = () => ({
+  precise: face.precise, lm: face.lmPts ? face.lmPts.length : 0, motion: +(face.motion || 0).toFixed(3),
+  react: P.react, iris: P.iris, swap: P.swap, faceMap: P.faceMap,
+  srcLm: faceMap.srcLm ? faceMap.srcLm.length : 0, tris: TRIANGLES ? TRIANGLES.length : 0,
+});
 startCamera();
 requestAnimationFrame(tick);
 </script>
