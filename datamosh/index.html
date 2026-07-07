@@ -102,6 +102,18 @@
   <h1>DATAMOSHER <small>/ webcam</small></h1>
   <div id="err"></div>
 
+  <div class="sec">presets</div>
+  <div class="row" id="presetRow">
+    <button data-preset="reset" title="Everything off, clean mosh">reset</button>
+    <button data-preset="vapor" title="Dreamy echo + orb trails">vaporwave</button>
+    <button data-preset="surveil" title="Face-tracking HUD, crisp until you move">surveillance</button>
+  </div>
+  <div class="row">
+    <button data-preset="acid" title="Kaleidoscope + trails + spin">acid trip</button>
+    <button data-preset="cubist" title="Moving cubist painting">cubist</button>
+    <button data-preset="liquid" title="Funhouse liquid warp">liquid</button>
+  </div>
+
   <div class="row">
     <button id="keyBtn" title="Reset to a clean frame (I-frame)">keyframe</button>
     <button id="moshBtn" class="active" title="Toggle moshing on/off">mosh</button>
@@ -493,6 +505,53 @@ $('voiceBtn').addEventListener('click', () => {
   P.voice = !P.voice;
   $('voiceBtn').classList.toggle('active', P.voice);
   if (P.voice) startMic();
+});
+
+// ---------- presets ----------
+const BTNS = [['moshBtn', 'mosh'], ['orbBtn', 'orb'], ['scanBtn', 'scan'], ['dissectBtn', 'dissect'],
+  ['preciseBtn', 'precise'], ['reactBtn', 'react'], ['irisBtn', 'iris'], ['swapBtn', 'swap'],
+  ['gateBtn', 'gate'], ['echoBtn', 'echo'], ['asciiBtn', 'ascii'], ['slitBtn', 'slit'],
+  ['fluidBtn', 'fluid'], ['cubismBtn', 'cubism'], ['vortexBtn', 'vortex'], ['magEyesBtn', 'magEyes'],
+  ['kaleidoBtn', 'kaleido'], ['sliceBtn', 'slice'], ['paintBtn', 'paint'], ['edgeBtn', 'edge'],
+  ['voiceBtn', 'voice'], ['laserBtn', 'laser'], ['psortBtn', 'psort']];
+const DEFAULTS = { block: 24, smear: 1.4, bleed: 0.06, chaos: 0, autoKey: 0, warp: 1, spin: 0.05,
+  dspeed: 1, blend: 0.9, feather: 0.6, gateThresh: 0.02, echoFade: 0.5, echoSpin: 2, asciiSize: 10,
+  slitSpeed: 2, fluidForce: 1, cubAmt: 1, vortexAmt: 1, magAmt: 1, kaleidoSeg: 8, sliceDelay: 4 };
+const OFF = ['orb', 'scan', 'dissect', 'react', 'iris', 'swap', 'gate', 'echo', 'ascii', 'slit',
+  'fluid', 'cubism', 'vortex', 'magEyes', 'kaleido', 'slice', 'paint', 'edge', 'voice', 'laser', 'psort'];
+const PRESETS = {
+  reset:   {},
+  vapor:   { echo: true, echoFade: 0.62, echoSpin: 1.2, orb: true, spin: 0.03, react: true, smear: 1.9, bleed: 0.1 },
+  surveil: { scan: true, precise: true, gate: true, react: true },
+  acid:    { kaleido: true, precise: true, echo: true, echoFade: 0.55, echoSpin: 3, iris: true, react: true, smear: 2.2, kaleidoSeg: 10 },
+  cubist:  { cubism: true, react: true, cubAmt: 1.3, smear: 1.6 },
+  liquid:  { fluid: true, fluidForce: 1.6, react: true, smear: 1.2, bleed: 0.12 },
+};
+const PRECISE_KEYS = ['scan', 'dissect', 'iris', 'swap', 'vortex', 'magEyes', 'kaleido', 'laser', 'psort', 'paint'];
+
+function syncUI() {
+  for (const [id, k] of BTNS) { const el = $(id); if (el) el.classList.toggle('active', !!P[k]); }
+  for (const k in DEFAULTS) { const el = $(k); if (el) { el.value = P[k]; el.dispatchEvent(new Event('input')); } }
+}
+function applyPreset(name) {
+  const p = PRESETS[name] || {};
+  for (const k of OFF) P[k] = false;
+  Object.assign(P, DEFAULTS);
+  P.mosh = true;
+  P.precise = false;
+  Object.assign(P, p);
+  if (P.precise || PRECISE_KEYS.some(k => P[k])) P.precise = true;
+  syncUI();
+  if (P.precise) { $('preciseBtn').classList.add('active'); loadMediaPipe(); }
+  if (P.paint) paintReset = true;
+  setFxStatus('preset: ' + name);
+}
+document.querySelectorAll('[data-preset]').forEach(b => {
+  b.addEventListener('click', () => {
+    applyPreset(b.dataset.preset);
+    b.classList.add('active');
+    setTimeout(() => b.classList.remove('active'), 250);
+  });
 });
 
 $('addFaceBtn').addEventListener('click', () => $('faceFile').click());
@@ -1684,14 +1743,39 @@ function updateFluid() {
   }
   flowPrev = g;
 }
+// bilinear displacement at pixel (vx,vy) -> source sample point
+function fluidSrc(vx, vy) {
+  const gx = Math.min(FLW - 1.001, Math.max(0, vx / W * (FLW - 1)));
+  const gy = Math.min(flh - 1.001, Math.max(0, vy / H * (flh - 1)));
+  const x0 = gx | 0, y0 = gy | 0, fx = gx - x0, fy = gy - y0, i = y0 * FLW + x0;
+  const dx = (dispX[i] * (1 - fx) + dispX[i + 1] * fx) * (1 - fy) + (dispX[i + FLW] * (1 - fx) + dispX[i + FLW + 1] * fx) * fy;
+  const dy = (dispY[i] * (1 - fx) + dispY[i + 1] * fx) * (1 - fy) + (dispY[i + FLW] * (1 - fx) + dispY[i + FLW + 1] * fx) * fy;
+  return [vx - dx * (W / FLW), vy - dy * (H / flh)];
+}
+function drawWarpTri(s0, s1, s2, d0, d1, d2) {
+  const m = affineTri({ x: s0[0], y: s0[1] }, { x: s1[0], y: s1[1] }, { x: s2[0], y: s2[1] },
+    { x: d0[0], y: d0[1] }, { x: d1[0], y: d1[1] }, { x: d2[0], y: d2[1] });
+  if (!m) return;
+  fctx.save();
+  fctx.beginPath(); fctx.moveTo(d0[0], d0[1]); fctx.lineTo(d1[0], d1[1]); fctx.lineTo(d2[0], d2[1]); fctx.closePath(); fctx.clip();
+  fctx.setTransform(m[0], m[1], m[2], m[3], m[4], m[5]);
+  fctx.drawImage(warpSrc, 0, 0);
+  fctx.restore();
+}
+// smooth mesh warp: displaced, shared vertices -> continuous (no square seams)
 function renderFluid() {
   warpCtx.clearRect(0, 0, W, H); warpCtx.drawImage(fb, 0, 0);
-  const cs = W / 48, sxr = FLW / W, syr = flh / H;
-  for (let py = 0; py < H; py += cs) for (let px = 0; px < W; px += cs) {
-    const fx = Math.min(FLW - 1, (px + cs / 2) * sxr | 0), fy = Math.min(flh - 1, (py + cs / 2) * syr | 0);
-    const k = fy * FLW + fx, ox = dispX[k] * (W / FLW), oy = dispY[k] * (H / flh);
-    fctx.drawImage(warpSrc, px - ox, py - oy, cs + 1, cs + 1, px, py, cs + 1, cs + 1);
+  const NX = 40, NY = Math.max(2, Math.round(NX * H / W)), cw = W / NX, ch = H / NY;
+  const vx = NX + 1, verts = [];
+  for (let j = 0; j <= NY; j++) for (let i = 0; i <= NX; i++) verts.push(fluidSrc(i * cw, j * ch));
+  fctx.imageSmoothingEnabled = true;
+  for (let j = 0; j < NY; j++) for (let i = 0; i < NX; i++) {
+    const a = verts[j * vx + i], b = verts[j * vx + i + 1], c = verts[(j + 1) * vx + i], e = verts[(j + 1) * vx + i + 1];
+    const dA = [i * cw, j * ch], dB = [(i + 1) * cw, j * ch], dC = [i * cw, (j + 1) * ch], dD = [(i + 1) * cw, (j + 1) * ch];
+    drawWarpTri(a, b, c, dA, dB, dC);
+    drawWarpTri(b, e, c, dB, dD, dC);
   }
+  fctx.setTransform(1, 0, 0, 1, 0, 0);
 }
 
 // frame-history ring for cubism / time-slice

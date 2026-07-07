@@ -48,6 +48,21 @@ This is real moshing, not a color filter. Each frame:
 
 Pressing **keyframe** injects a clean frame (an I-frame), resetting the smear.
 
+## Presets
+
+One-tap combos at the top of the panel set a curated mix of effects and slider values:
+
+| Preset | What it turns on |
+|--------|------------------|
+| reset | Everything off, clean mosh (also drops back to the fast tracker) |
+| vaporwave | Echo trails + slow orb spin + reactive smear |
+| surveillance | Face-scan HUD + precise tracking + motion gate (crisp until you move) |
+| acid trip | Kaleidoscope + echo trails + spinning irises |
+| cubist | Moving cubist shard grid |
+| liquid | Funhouse fluid warp |
+
+Presets are just starting points — tweak any toggle or slider afterward.
+
 ## Controls
 
 | Control | Effect |
