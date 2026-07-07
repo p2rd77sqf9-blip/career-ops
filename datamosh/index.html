@@ -113,6 +113,9 @@
     <button data-preset="cubist" title="Moving cubist painting">cubist</button>
     <button data-preset="liquid" title="Funhouse liquid warp">liquid</button>
   </div>
+  <div class="row">
+    <button data-preset="bassdrop" title="Datamosh on the beat — load a track or use the mic">bass drop</button>
+  </div>
 
   <div class="row">
     <button id="keyBtn" title="Reset to a clean frame (I-frame)">keyframe</button>
@@ -165,6 +168,16 @@
     <button id="voiceBtn" title="Mic loudness drives intensity + head scale">voice</button>
     <button id="laserBtn" title="Laser eyes that bounce off the edges (precise)">laser</button>
     <button id="psortBtn" title="Pixel-sort your face on a blink (precise)">blink sort</button>
+  </div>
+  <div class="sec">audio-reactive</div>
+  <div class="row">
+    <button id="bassBtn" title="Datamosh triggered by the kick drum / low end (20–150Hz)">bass mosh</button>
+    <button id="trackBtn" title="Play a music file and drive the mosh from it">load track</button>
+  </div>
+  <input type="file" id="trackFile" accept="audio/*" style="display:none">
+  <div class="ctl">
+    <label>bass trigger <output id="bassThreshV">0.40</output></label>
+    <input type="range" id="bassThresh" min="0.1" max="0.85" step="0.05" value="0.4">
   </div>
 
   <div id="fxStatus" style="color:var(--dim); min-height:1.2em; margin-top:-6px;">tracker: fast (offline)</div>
@@ -268,7 +281,7 @@
     <b>O</b> orb &nbsp; <b>H</b> scan &nbsp; <b>D</b> dissect &nbsp; <b>P</b> precise<br>
     <b>T</b> react &nbsp; <b>I</b> iris &nbsp; <b>W</b> swap<br>
     <b>E</b> gate &nbsp; <b>F</b> echo &nbsp; <b>A</b> ascii &nbsp; <b>L</b> slit<br>
-    <b>R</b> record &nbsp; <b>S</b> snapshot
+    <b>0</b> bass &nbsp; <b>R</b> record &nbsp; <b>S</b> snapshot
   </div>
 </div>
 
@@ -324,6 +337,8 @@ const P = {
   voice: false,  // mic loudness drives intensity/scale
   laser: false,  // laser eyes with bounce (precise)
   psort: false,  // pixel-sort on blink (precise)
+  bass: false,   // datamosh triggered by low-end / kick drums
+  bassThresh: 0.4, // kick trigger threshold
 };
 
 const MW = 160;              // motion-estimation width (small grayscale grid)
@@ -386,6 +401,8 @@ const flowCanvas = document.createElement('canvas');
 const flowCtx = flowCanvas.getContext('2d', { willReadFrequently: true });
 // audio
 let audioLevel = 0, analyser = null, audioData = null, micOn = false;
+let audioCtx = null, freqData = null, trackEl = null;
+let bassLevel = 0, kickEnv = 0, bassPrev = 0, kickCd = 0;
 // particles (edge explosion) + blink/shake state
 let particles = [];
 let eyeOpenPrev = 1, blinkFire = 0, shakePrev = 0, psortRows = null, psortLife = 0;
@@ -424,6 +441,7 @@ bindSlider('vortexAmt', 'vortexAmt', v => v.toFixed(1));
 bindSlider('magAmt', 'magAmt', v => v.toFixed(1));
 bindSlider('kaleidoSeg', 'kaleidoSeg', v => v | 0);
 bindSlider('sliceDelay', 'sliceDelay', v => v | 0);
+bindSlider('bassThresh', 'bassThresh', v => v.toFixed(2));
 $('warp').addEventListener('input', () => { orbMapDirty = true; });
 
 $('mirror').addEventListener('change', e => { P.mirror = e.target.checked; needKeyframe = true; });
@@ -506,6 +524,16 @@ $('voiceBtn').addEventListener('click', () => {
   $('voiceBtn').classList.toggle('active', P.voice);
   if (P.voice) startMic();
 });
+$('bassBtn').addEventListener('click', () => {
+  P.bass = !P.bass;
+  $('bassBtn').classList.toggle('active', P.bass);
+  if (P.bass && !micOn) startMic(); // default to mic unless a track is loaded
+});
+$('trackBtn').addEventListener('click', () => $('trackFile').click());
+$('trackFile').addEventListener('change', e => {
+  if (e.target.files && e.target.files[0]) loadTrack(e.target.files[0]);
+  e.target.value = '';
+});
 
 // ---------- presets ----------
 const BTNS = [['moshBtn', 'mosh'], ['orbBtn', 'orb'], ['scanBtn', 'scan'], ['dissectBtn', 'dissect'],
@@ -513,12 +541,12 @@ const BTNS = [['moshBtn', 'mosh'], ['orbBtn', 'orb'], ['scanBtn', 'scan'], ['dis
   ['gateBtn', 'gate'], ['echoBtn', 'echo'], ['asciiBtn', 'ascii'], ['slitBtn', 'slit'],
   ['fluidBtn', 'fluid'], ['cubismBtn', 'cubism'], ['vortexBtn', 'vortex'], ['magEyesBtn', 'magEyes'],
   ['kaleidoBtn', 'kaleido'], ['sliceBtn', 'slice'], ['paintBtn', 'paint'], ['edgeBtn', 'edge'],
-  ['voiceBtn', 'voice'], ['laserBtn', 'laser'], ['psortBtn', 'psort']];
+  ['voiceBtn', 'voice'], ['laserBtn', 'laser'], ['psortBtn', 'psort'], ['bassBtn', 'bass']];
 const DEFAULTS = { block: 24, smear: 1.4, bleed: 0.06, chaos: 0, autoKey: 0, warp: 1, spin: 0.05,
   dspeed: 1, blend: 0.9, feather: 0.6, gateThresh: 0.02, echoFade: 0.5, echoSpin: 2, asciiSize: 10,
-  slitSpeed: 2, fluidForce: 1, cubAmt: 1, vortexAmt: 1, magAmt: 1, kaleidoSeg: 8, sliceDelay: 4 };
+  slitSpeed: 2, fluidForce: 1, cubAmt: 1, vortexAmt: 1, magAmt: 1, kaleidoSeg: 8, sliceDelay: 4, bassThresh: 0.4 };
 const OFF = ['orb', 'scan', 'dissect', 'react', 'iris', 'swap', 'gate', 'echo', 'ascii', 'slit',
-  'fluid', 'cubism', 'vortex', 'magEyes', 'kaleido', 'slice', 'paint', 'edge', 'voice', 'laser', 'psort'];
+  'fluid', 'cubism', 'vortex', 'magEyes', 'kaleido', 'slice', 'paint', 'edge', 'voice', 'laser', 'psort', 'bass'];
 const PRESETS = {
   reset:   {},
   vapor:   { echo: true, echoFade: 0.62, echoSpin: 1.2, orb: true, spin: 0.03, react: true, smear: 1.9, bleed: 0.1 },
@@ -526,6 +554,7 @@ const PRESETS = {
   acid:    { kaleido: true, precise: true, echo: true, echoFade: 0.55, echoSpin: 3, iris: true, react: true, smear: 2.2, kaleidoSeg: 10 },
   cubist:  { cubism: true, react: true, cubAmt: 1.3, smear: 1.6 },
   liquid:  { fluid: true, fluidForce: 1.6, react: true, smear: 1.2, bleed: 0.12 },
+  bassdrop:{ bass: true, smear: 1.6, bassThresh: 0.4 },
 };
 const PRECISE_KEYS = ['scan', 'dissect', 'iris', 'swap', 'vortex', 'magEyes', 'kaleido', 'laser', 'psort', 'paint'];
 
@@ -544,7 +573,8 @@ function applyPreset(name) {
   syncUI();
   if (P.precise) { $('preciseBtn').classList.add('active'); loadMediaPipe(); }
   if (P.paint) paintReset = true;
-  setFxStatus('preset: ' + name);
+  if (P.bass && !micOn) startMic();
+  setFxStatus(name === 'bassdrop' ? 'bass drop — load a track or allow the mic' : 'preset: ' + name);
 }
 document.querySelectorAll('[data-preset]').forEach(b => {
   b.addEventListener('click', () => {
@@ -592,6 +622,7 @@ addEventListener('keydown', e => {
     case 'KeyJ': $('voiceBtn').click(); break;
     case 'KeyZ': $('laserBtn').click(); break;
     case 'KeyQ': $('psortBtn').click(); break;
+    case 'Digit0': $('bassBtn').click(); break;
     case 'KeyR': toggleRecord(); break;
     case 'KeyS': snapshot(); break;
   }
@@ -721,11 +752,11 @@ function tick(now) {
     computeFaceMotion(now);
     updateTriggers(now);
   }
-  if (P.voice) updateAudio(now);
+  if (P.voice || P.bass) updateAudio(now);
   if (P.fluid) updateFluid();
 
-  // motion gate: when the frame is nearly still, keep it crisp (no mosh)
-  const still = P.gate && globalMotion() < P.gateThresh;
+  // motion gate: still frames stay crisp. bass mode: crisp between kicks.
+  const still = (P.gate && globalMotion() < P.gateThresh) || (P.bass && kickEnv < 0.05);
 
   const autoDue = P.autoKey > 0 && now - lastKeyTime > P.autoKey * 1000;
   if (needKeyframe || autoDue || !P.mosh || still) {
@@ -766,6 +797,7 @@ function tick(now) {
   if (P.edge) renderEdge(now);
   updateParticles();
   if (P.laser) renderLaser();
+  if (P.bass) drawBassMeter();
 
   if (P.scan && !P.ascii && !P.slit && !P.cubism && !P.kaleido) drawScanHUD(now);
 
@@ -792,6 +824,13 @@ function mosh() {
   if (P.voice) {
     smear *= 1 + audioLevel * 3;
     chaosP = Math.min(1, chaosP + audioLevel * 0.5);
+  }
+  // bass: the kick drum drives a massive smear that freezes the frame
+  let bleed = P.bleed;
+  if (P.bass) {
+    smear *= 1 + kickEnv * 7;
+    chaosP = Math.min(1, chaosP + kickEnv * 0.6);
+    bleed *= 1 - Math.min(1, kickEnv * 1.3); // stop fresh pixels -> face freezes + smears
   }
 
   // block size in small-grid units (>= 2)
@@ -836,7 +875,7 @@ function mosh() {
   [fctx, tctx] = [tctx, fctx];
 
   // bleed a little of the real frame back in so residual detail accumulates
-  if (P.bleed > 0) drawFrame(fctx, P.bleed);
+  if (bleed > 0) drawFrame(fctx, bleed);
 
   const t = grayCur; grayCur = grayPrev; grayPrev = t;
 }
@@ -1934,29 +1973,83 @@ function pixelSortFace() {
   fctx.drawImage(readCanvas, bx, by, bw, bh, bx, by, bw, bh);
 }
 
-// mic / voice level
+// shared analyser (fed by mic and/or a loaded track)
+function ensureAnalyser() {
+  if (analyser) return;
+  audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+  analyser = audioCtx.createAnalyser();
+  analyser.fftSize = 2048;               // ~21Hz/bin at 44.1k — resolves the low end
+  analyser.smoothingTimeConstant = 0.5;
+  audioData = new Uint8Array(analyser.frequencyBinCount);
+  freqData = new Uint8Array(analyser.frequencyBinCount);
+}
 async function startMic() {
   if (micOn) return;
   try {
+    ensureAnalyser();
+    await audioCtx.resume();
     const s = await navigator.mediaDevices.getUserMedia({ audio: true });
-    const ac = new (window.AudioContext || window.webkitAudioContext)();
-    const src = ac.createMediaStreamSource(s);
-    analyser = ac.createAnalyser(); analyser.fftSize = 512;
-    audioData = new Uint8Array(analyser.frequencyBinCount);
-    src.connect(analyser); micOn = true;
+    audioCtx.createMediaStreamSource(s).connect(analyser); // analysed, not routed to speakers
+    micOn = true;
   } catch (e) {
-    console.error('mic error:', e); P.voice = false; $('voiceBtn').classList.remove('active');
+    console.error('mic error:', e); P.voice = false; P.bass = false;
+    $('voiceBtn').classList.remove('active'); $('bassBtn').classList.remove('active');
     setFxStatus('mic unavailable');
   }
 }
+async function loadTrack(file) {
+  try {
+    ensureAnalyser();
+    await audioCtx.resume();
+    if (!trackEl) {
+      trackEl = new Audio(); trackEl.loop = true;
+      const node = audioCtx.createMediaElementSource(trackEl);
+      node.connect(analyser);                 // tap for analysis
+      node.connect(audioCtx.destination);     // and hear it
+    }
+    trackEl.src = URL.createObjectURL(file);
+    await trackEl.play();
+    micOn = true;
+    if (!P.bass) { P.bass = true; $('bassBtn').classList.add('active'); }
+    setFxStatus('track: ' + file.name);
+  } catch (e) { console.error('track error:', e); setFxStatus('could not play that track'); }
+}
+function computeBass() {
+  analyser.getByteFrequencyData(freqData);
+  const bw = (audioCtx.sampleRate / 2) / freqData.length;   // Hz per bin
+  const lo = Math.max(1, Math.floor(20 / bw)), hi = Math.min(freqData.length - 1, Math.ceil(150 / bw));
+  let s = 0;
+  for (let i = lo; i <= hi; i++) s += freqData[i];
+  bassLevel = s / ((hi - lo + 1) * 255);
+}
 function updateAudio(now) {
-  if (!analyser) { audioLevel *= 0.9; return; }
+  if (!analyser) { audioLevel *= 0.9; kickEnv *= 0.85; return; }
   analyser.getByteTimeDomainData(audioData);
   let sum = 0;
   for (let i = 0; i < audioData.length; i++) { const v = (audioData[i] - 128) / 128; sum += v * v; }
-  const rms = Math.sqrt(sum / audioData.length);
-  audioLevel += (Math.min(1, rms * 3.5) - audioLevel) * 0.35;
-  if (audioLevel > 0.55 && now > _glCd) { glitchFrames = Math.max(glitchFrames, 8); _glCd = now + 220; }
+  audioLevel += (Math.min(1, Math.sqrt(sum / audioData.length) * 3.5) - audioLevel) * 0.35;
+  if (P.voice && audioLevel > 0.55 && now > _glCd) { glitchFrames = Math.max(glitchFrames, 8); _glCd = now + 220; }
+  // bass / kick detection
+  if (P.bass) {
+    computeBass();
+    if (bassLevel > P.bassThresh && bassLevel > bassPrev * 1.04 && now > kickCd) {
+      kickEnv = 1; kickCd = now + 110;                       // one trigger per kick
+      glitchFrames = Math.max(glitchFrames, 16);             // massive glitch on the beat
+    }
+    bassPrev = bassLevel;
+  }
+  kickEnv *= 0.85;                                           // smear settles back between kicks
+}
+function drawBassMeter() {
+  const x = 12, y = H - 22, w = W * 0.42, h = 10;
+  octx.save();
+  octx.fillStyle = 'rgba(0,0,0,.45)'; octx.fillRect(x - 3, y - 3, w + 6, h + 6);
+  octx.fillStyle = 'rgba(124,242,192,.85)'; octx.fillRect(x, y, w * Math.min(1, bassLevel), h);
+  octx.fillStyle = kickEnv > 0.5 ? '#ff5f8f' : '#7cf2c0';
+  octx.fillRect(x + w * P.bassThresh - 1, y - 2, 2, h + 4);  // threshold marker
+  octx.fillStyle = '#fff'; octx.font = '10px ui-monospace, monospace'; octx.textBaseline = 'top';
+  octx.fillText('BASS' + (kickEnv > 0.5 ? ' ● KICK' : ''), x, y - 14);
+  octx.restore();
 }
 
 // per-frame trigger detection (blink)
@@ -2017,6 +2110,7 @@ window._dbg = () => ({
   faces: faceList.length, maps: faceMaps.length,
   oval: FACE_OVAL ? FACE_OVAL.length : 0, tris: TRIANGLES ? TRIANGLES.length : 0,
   gate: P.gate, gmMotion: +gmMotion.toFixed(4), echo: P.echo, ascii: P.ascii, slit: P.slit,
+  bass: P.bass, bassLevel: +bassLevel.toFixed(3), kickEnv: +kickEnv.toFixed(3),
 });
 window._getMaps = () => faceMaps; // debug: current source faces
 startCamera();

@@ -60,8 +60,19 @@ One-tap combos at the top of the panel set a curated mix of effects and slider v
 | acid trip | Kaleidoscope + echo trails + spinning irises |
 | cubist | Moving cubist shard grid |
 | liquid | Funhouse fluid warp |
+| bass drop | Datamosh locked to the kick drum (load a track or use the mic) |
 
 Presets are just starting points — tweak any toggle or slider afterward.
+
+## Audio-reactive (bass mosh)
+
+`bass mosh` ties the glitch directly to the low end instead of firing randomly. It runs an FFT on the audio (a 2048-point analyser, ~21Hz per bin) and watches the 20–150Hz bins — the kick-drum band. When that energy crosses the `bass trigger` threshold and is rising, it fires a kick: a massive smear that *freezes* the frame (fresh pixels are held back so your face streaks in place) plus a glitch burst. Between kicks the mosh settles and snaps back to a crisp clean frame, so quiet bridges look normal and drops explode. A little BASS meter in the corner shows the live level, the threshold marker, and flashes on each detected kick.
+
+Two audio sources:
+- **mic** (default) — plays whatever the microphone hears, so it reacts to music in the room. Enabling `bass mosh` asks for mic permission.
+- **load track** — pick an audio file; it plays through your speakers and drives the effect directly (cleaner than the mic). This auto-enables bass mode.
+
+Tune `bass trigger` to the track: lower if it's not catching the kicks, higher if everything triggers it.
 
 ## Controls
 
@@ -99,6 +110,9 @@ Presets are just starting points — tweak any toggle or slider afterward.
 | `voice` (J) | Mic loudness drives datamosh intensity — shout to tear it apart |
 | `laser` (Z) | Neon laser beams from your eyes that bounce off the screen edges (precise) |
 | `blink sort` (Q) | Pixel-sorts your face into melting brightness columns on a blink (precise) |
+| `bass mosh` (0) | Ties the datamosh to the kick drum — a big glitch/freeze/smear fires on the beat, snapping crisp between kicks |
+| `load track` | Play a music file and drive `bass mosh` from it (instead of the mic) |
+| bass trigger | How hard the low end (20–150Hz) must hit to fire a kick |
 | fluid force / cubism amt / vortex amt / eye magnify | Strength of each warp |
 | kaleido segments / slice delay | Kaleidoscope mirror count / frames of delay per strip |
 | orb warp | Radial curve of the orb — low = rim-heavy fisheye, high = pinched center |
