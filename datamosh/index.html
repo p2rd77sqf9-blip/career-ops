@@ -20,7 +20,8 @@
     color: var(--ink);
     font: 13px/1.5 ui-monospace, "SF Mono", Menlo, Consolas, monospace;
     display: flex;
-    min-height: 100vh;
+    height: 100vh;
+    overflow: hidden;
   }
   #stage {
     flex: 1;
@@ -89,6 +90,7 @@
     display: none;
     white-space: pre-wrap;
   }
+  .sec { color: var(--accent); font-size: 11px; letter-spacing: .12em; text-transform: uppercase; margin: 4px 0 -4px; opacity: .8; }
   .keys { color: var(--dim); border-top: 1px solid #2a2a33; padding-top: 10px; }
   .keys b { color: var(--ink); font-weight: normal; background: #23232c; padding: 0 5px; border-radius: 3px; }
 </style>
@@ -130,6 +132,27 @@
     <button id="echoBtn" title="Feedback trails (delay + rotation + fade)">echo</button>
     <button id="asciiBtn" title="Render as colored text characters">ascii</button>
     <button id="slitBtn" title="Slit-scan time smear">slit</button>
+  </div>
+
+  <div class="sec">warp</div>
+  <div class="row">
+    <button id="fluidBtn" title="Funhouse fluid — head motion pushes pixels like liquid">fluid</button>
+    <button id="cubismBtn" title="Cubist shard grid driven by movement">cubism</button>
+    <button id="vortexBtn" title="Mouth black hole — open wide to suck your face in (precise)">vortex</button>
+    <button id="magEyesBtn" title="Magnifying-glass eyes, scaled by how wide they open (precise)">mag eyes</button>
+  </div>
+  <div class="sec">art</div>
+  <div class="row">
+    <button id="kaleidoBtn" title="Kaleidoscope mirrored around your nose (precise)">kaleido</button>
+    <button id="sliceBtn" title="Time-slice waterfall — strips delayed by a few frames">slice</button>
+    <button id="paintBtn" title="Freeze frame; your nose paints live video back in (precise)">paint</button>
+    <button id="edgeBtn" title="Neon edge lines; shake to explode into particles">edge</button>
+  </div>
+  <div class="sec">silly</div>
+  <div class="row">
+    <button id="voiceBtn" title="Mic loudness drives intensity + head scale">voice</button>
+    <button id="laserBtn" title="Laser eyes that bounce off the edges (precise)">laser</button>
+    <button id="psortBtn" title="Pixel-sort your face on a blink (precise)">blink sort</button>
   </div>
 
   <div id="fxStatus" style="color:var(--dim); min-height:1.2em; margin-top:-6px;">tracker: fast (offline)</div>
@@ -194,6 +217,30 @@
     <label>slit speed <output id="slitSpeedV">2</output></label>
     <input type="range" id="slitSpeed" min="1" max="8" step="1" value="2">
   </div>
+  <div class="ctl">
+    <label>fluid force <output id="fluidForceV">1.0</output></label>
+    <input type="range" id="fluidForce" min="0" max="3" step="0.1" value="1">
+  </div>
+  <div class="ctl">
+    <label>cubism amt <output id="cubAmtV">1.0</output></label>
+    <input type="range" id="cubAmt" min="0" max="2" step="0.1" value="1">
+  </div>
+  <div class="ctl">
+    <label>vortex amt <output id="vortexAmtV">1.0</output></label>
+    <input type="range" id="vortexAmt" min="0" max="2" step="0.1" value="1">
+  </div>
+  <div class="ctl">
+    <label>eye magnify <output id="magAmtV">1.0</output></label>
+    <input type="range" id="magAmt" min="0" max="2" step="0.1" value="1">
+  </div>
+  <div class="ctl">
+    <label>kaleido segments <output id="kaleidoSegV">8</output></label>
+    <input type="range" id="kaleidoSeg" min="4" max="16" step="2" value="8">
+  </div>
+  <div class="ctl">
+    <label>slice delay <output id="sliceDelayV">4</output></label>
+    <input type="range" id="sliceDelay" min="1" max="12" step="1" value="4">
+  </div>
 
   <label class="check"><input type="checkbox" id="mirror" checked> mirror</label>
 
@@ -247,6 +294,24 @@ const P = {
   asciiSize: 10, // ascii cell size (px)
   slit: false,   // slit-scan time smear
   slitSpeed: 2,  // columns captured per frame
+  // — batch 3 —
+  fluid: false,  // funhouse fluid displacement
+  fluidForce: 1, // fluid push strength
+  cubism: false, // cubist shard grid
+  cubAmt: 1,     // cubism rotation/offset amount
+  vortex: false, // mouth black hole (precise)
+  vortexAmt: 1,  // vortex strength
+  magEyes: false,// magnifying-glass eyes (precise)
+  magAmt: 1,     // eye magnification amount
+  paint: false,  // nose/chin paintbrush onto frozen frame (precise)
+  edge: false,   // edge-detect neon + shake particles
+  kaleido: false,// kaleidoscope around nose (precise)
+  kaleidoSeg: 8, // kaleidoscope segments
+  slice: false,  // time-slice delay waterfall
+  sliceDelay: 4, // frames of delay per strip
+  voice: false,  // mic loudness drives intensity/scale
+  laser: false,  // laser eyes with bounce (precise)
+  psort: false,  // pixel-sort on blink (precise)
 };
 
 const MW = 160;              // motion-estimation width (small grayscale grid)
@@ -289,6 +354,30 @@ const slitCtx = slitCanvas.getContext('2d');
 const slitTmp = document.createElement('canvas');
 const slitTmpCtx = slitTmp.getContext('2d');
 
+// batch-3 buffers
+const warpSrc = document.createElement('canvas');    // fb snapshot for mesh warps
+const warpCtx = warpSrc.getContext('2d');
+const paintCanvas = document.createElement('canvas');// persistent paint layer
+const paintCtx = paintCanvas.getContext('2d');
+const frozenCanvas = document.createElement('canvas');
+const frozenCtx = frozenCanvas.getContext('2d');
+let paintReset = false;
+const kd = document.createElement('canvas');         // kaleidoscope scratch
+const kdCtx = kd.getContext('2d');
+// frame-history ring (cubism / time-slice)
+const HIST = 16;
+let histRing = [], histHead = 0, histReady = false;
+// fluid flow field
+const FLW = 96; let flh = 72;
+let flowX = null, flowY = null, dispX = null, dispY = null, flowPrev = null;
+const flowCanvas = document.createElement('canvas');
+const flowCtx = flowCanvas.getContext('2d', { willReadFrequently: true });
+// audio
+let audioLevel = 0, analyser = null, audioData = null, micOn = false;
+// particles (edge explosion) + blink/shake state
+let particles = [];
+let eyeOpenPrev = 1, blinkFire = 0, shakePrev = 0, psortRows = null, psortLife = 0;
+
 // ---------- UI wiring ----------
 const $ = id => document.getElementById(id);
 const status = $('status');
@@ -317,6 +406,12 @@ bindSlider('echoFade', 'echoFade', v => v.toFixed(2));
 bindSlider('echoSpin', 'echoSpin', v => v.toFixed(1));
 bindSlider('asciiSize', 'asciiSize', v => v | 0);
 bindSlider('slitSpeed', 'slitSpeed', v => v | 0);
+bindSlider('fluidForce', 'fluidForce', v => v.toFixed(1));
+bindSlider('cubAmt', 'cubAmt', v => v.toFixed(1));
+bindSlider('vortexAmt', 'vortexAmt', v => v.toFixed(1));
+bindSlider('magAmt', 'magAmt', v => v.toFixed(1));
+bindSlider('kaleidoSeg', 'kaleidoSeg', v => v | 0);
+bindSlider('sliceDelay', 'sliceDelay', v => v | 0);
 $('warp').addEventListener('input', () => { orbMapDirty = true; });
 
 $('mirror').addEventListener('change', e => { P.mirror = e.target.checked; needKeyframe = true; });
@@ -375,6 +470,31 @@ toggleBtn('echoBtn', 'echo');
 toggleBtn('asciiBtn', 'ascii');
 toggleBtn('slitBtn', 'slit');
 
+// batch 3 toggles (some auto-enable precise / request extra permissions)
+toggleBtn('fluidBtn', 'fluid');
+toggleBtn('cubismBtn', 'cubism');
+function toggleNeedsPrecise(id, key, extra) {
+  $(id).addEventListener('click', () => {
+    P[key] = !P[key];
+    $(id).classList.toggle('active', P[key]);
+    if (P[key]) { needPrecise(); if (extra) extra(true); }
+    else if (extra) extra(false);
+  });
+}
+toggleNeedsPrecise('vortexBtn', 'vortex');
+toggleNeedsPrecise('magEyesBtn', 'magEyes');
+toggleNeedsPrecise('kaleidoBtn', 'kaleido');
+toggleNeedsPrecise('laserBtn', 'laser');
+toggleNeedsPrecise('psortBtn', 'psort');
+toggleNeedsPrecise('paintBtn', 'paint', on => { if (on) paintReset = true; });
+toggleBtn('sliceBtn', 'slice');
+toggleBtn('edgeBtn', 'edge');
+$('voiceBtn').addEventListener('click', () => {
+  P.voice = !P.voice;
+  $('voiceBtn').classList.toggle('active', P.voice);
+  if (P.voice) startMic();
+});
+
 $('addFaceBtn').addEventListener('click', () => $('faceFile').click());
 $('faceFile').addEventListener('change', e => {
   if (e.target.files && e.target.files.length) handleFaceUpload(e.target.files);
@@ -402,6 +522,17 @@ addEventListener('keydown', e => {
     case 'KeyF': $('echoBtn').click(); break;
     case 'KeyA': $('asciiBtn').click(); break;
     case 'KeyL': $('slitBtn').click(); break;
+    case 'KeyU': $('fluidBtn').click(); break;
+    case 'KeyC': $('cubismBtn').click(); break;
+    case 'KeyV': $('vortexBtn').click(); break;
+    case 'KeyY': $('magEyesBtn').click(); break;
+    case 'KeyK': $('kaleidoBtn').click(); break;
+    case 'KeyN': $('sliceBtn').click(); break;
+    case 'KeyB': $('paintBtn').click(); break;
+    case 'KeyX': $('edgeBtn').click(); break;
+    case 'KeyJ': $('voiceBtn').click(); break;
+    case 'KeyZ': $('laserBtn').click(); break;
+    case 'KeyQ': $('psortBtn').click(); break;
     case 'KeyR': toggleRecord(); break;
     case 'KeyS': snapshot(); break;
   }
@@ -441,6 +572,18 @@ function setupSizes(w, h) {
   echoCanvas.width = W; echoCanvas.height = H;
   slitCanvas.width = W; slitCanvas.height = H;
   slitTmp.width = W; slitTmp.height = H;
+  warpSrc.width = W; warpSrc.height = H;
+  paintCanvas.width = W; paintCanvas.height = H;
+  frozenCanvas.width = W; frozenCanvas.height = H;
+  kd.width = W; kd.height = H;
+  histRing = []; histReady = false; histHead = 0;
+  for (let i = 0; i < HIST; i++) { const c = document.createElement('canvas'); c.width = W; c.height = H; histRing.push(c); }
+  flh = Math.max(1, Math.round(FLW * H / W));
+  flowCanvas.width = FLW; flowCanvas.height = flh;
+  flowX = new Float32Array(FLW * flh); flowY = new Float32Array(FLW * flh);
+  dispX = new Float32Array(FLW * flh); dispY = new Float32Array(FLW * flh);
+  flowPrev = null;
+  paintReset = true;
   grayCur = new Uint8ClampedArray(MW * MH);
   grayPrev = new Uint8ClampedArray(MW * MH);
   gmPrev = null;
@@ -513,10 +656,14 @@ function tick(now) {
   if (!camReady || video.readyState < 2) return;
 
   // face tracking first, so react can drive this frame's mosh intensity
-  if (P.scan || P.dissect || P.iris || P.swap || P.faceMap || P.react) {
+  if (P.scan || P.dissect || P.iris || P.swap || P.faceMap || P.react ||
+      P.vortex || P.magEyes || P.kaleido || P.laser || P.psort || P.paint || P.cubism || P.edge) {
     updateFace(now);
     computeFaceMotion(now);
+    updateTriggers(now);
   }
+  if (P.voice) updateAudio(now);
+  if (P.fluid) updateFluid();
 
   // motion gate: when the frame is nearly still, keep it crisp (no mosh)
   const still = P.gate && globalMotion() < P.gateThresh;
@@ -536,16 +683,32 @@ function tick(now) {
   if (P.swap) applySwap(now);
   if (P.iris) applyIris(now);
   if (P.dissect) applyDissect(now);
+  // warp composites
+  if (P.fluid) renderFluid();
+  if (P.vortex) applyVortex();
+  if (P.magEyes) applyMagEyes();
+  if (P.psort && blinkFire && now - blinkFire < 60) { pixelSortFace(); blinkFire = 0; }
 
   if (P.echo) applyEcho();
 
-  // display mode (slit / ascii / orb / normal)
-  if (P.slit) renderSlit();
+  if (P.cubism || P.slice) pushHistory();
+
+  // display mode
+  if (P.kaleido) renderKaleido();
+  else if (P.cubism) renderCubism();
+  else if (P.slice) renderSlice();
+  else if (P.paint) renderPaint();
+  else if (P.slit) renderSlit();
   else if (P.ascii) renderAscii();
   else if (P.orb) renderOrb(now);
   else octx.drawImage(fb, 0, 0);
 
-  if (P.scan && !P.ascii && !P.slit) drawScanHUD(now);
+  // overlays
+  if (P.edge) renderEdge(now);
+  updateParticles();
+  if (P.laser) renderLaser();
+
+  if (P.scan && !P.ascii && !P.slit && !P.cubism && !P.kaleido) drawScanHUD(now);
 
   frames++;
   if (now - lastFps > 1000) {
@@ -565,6 +728,11 @@ function mosh() {
     const m = face.motion || 0;
     smear *= 1 + 2.4 * m;
     chaosP = Math.min(1, chaosP + 0.5 * Math.max(0, m - 0.5));
+  }
+  // voice: mic loudness cranks intensity
+  if (P.voice) {
+    smear *= 1 + audioLevel * 3;
+    chaosP = Math.min(1, chaosP + audioLevel * 0.5);
   }
 
   // block size in small-grid units (>= 2)
@@ -1026,6 +1194,7 @@ function computeFaceMotion(now) {
     const inst = Math.min(2, d / dt * 0.18);
     face.motion = (face.motion || 0) + (inst - (face.motion || 0)) * 0.25;
   }
+  face.shake = (face.shake || 0) * 0.8 + Math.abs(face.x - _pfx) * 0.2;
   _pfx = face.x; _pfy = face.y; _pfs = face.s; _pft = now;
   if (P.react && face.motion > 0.7 && now > _glCd) { glitchFrames = Math.max(glitchFrames, 6); _glCd = now + 250; }
 }
@@ -1424,6 +1593,294 @@ function renderSlit() {
   slitCtx.drawImage(slitTmp, -k, 0);                 // scroll history left
   slitCtx.drawImage(fb, W >> 1, 0, 1, H, W - k, 0, k, H); // append center column at right
   octx.drawImage(slitCanvas, 0, 0);
+}
+
+// ======================= batch 3 effects =======================
+function ld(i) { return face.lmPts ? face.lmPts[i] : null; }
+function d2(a, b) { return Math.hypot(a.x - b.x, a.y - b.y); }
+function mouthOpen() {
+  if (!face.lmPts) return 0;
+  const p = face.lmPts;
+  return Math.min(1.5, d2(p[13], p[14]) / Math.max(1, d2(p[61], p[291])) * 1.9);
+}
+function eyeOpen(side) {
+  if (!face.lmPts) return 0.3;
+  const p = face.lmPts;
+  const a = side === 'L' ? [159, 145, 33, 133] : [386, 374, 362, 263];
+  return d2(p[a[0]], p[a[1]]) / Math.max(1, d2(p[a[2]], p[a[3]]));
+}
+
+// warp a circular region of fb by a sample-remap function
+function meshWarp(cx, cy, rad, fn) {
+  warpCtx.clearRect(0, 0, W, H); warpCtx.drawImage(fb, 0, 0);
+  const cs = Math.max(4, rad / 12);
+  const x0 = Math.max(0, cx - rad), x1 = Math.min(W, cx + rad);
+  const y0 = Math.max(0, cy - rad), y1 = Math.min(H, cy + rad);
+  for (let py = y0; py < y1; py += cs) {
+    for (let px = x0; px < x1; px += cs) {
+      const ccx = px + cs / 2, ccy = py + cs / 2;
+      const dx = ccx - cx, dy = ccy - cy;
+      if (dx * dx + dy * dy > rad * rad) continue;
+      const s = fn(ccx, ccy);
+      fctx.drawImage(warpSrc, s[0] - cs / 2, s[1] - cs / 2, cs + 1, cs + 1, px, py, cs + 1, cs + 1);
+    }
+  }
+}
+
+// mouth vortex / black hole
+function applyVortex() {
+  if (!face.lmPts) return;
+  const p = face.lmPts, cx = (p[13].x + p[14].x) / 2, cy = (p[13].y + p[14].y) / 2;
+  const open = mouthOpen();
+  const rad = face.s * (0.28 + open * 0.5);
+  const str = (0.3 + open * 0.9) * P.vortexAmt;
+  meshWarp(cx, cy, rad, (px, py) => {
+    const dx = px - cx, dy = py - cy, dd = Math.hypot(dx, dy) || 1, t = dd / rad;
+    const pull = str * (1 - t) * (1 - t);
+    const ang = pull * 2.4, ca = Math.cos(ang), sa = Math.sin(ang);
+    const rx = dx * (1 + pull * 1.5), ry = dy * (1 + pull * 1.5);
+    return [cx + rx * ca - ry * sa, cy + rx * sa + ry * ca];
+  });
+}
+
+// magnifying-glass eyes (bulge scaled by openness)
+function applyMagEyes() {
+  if (!face.lmPts) return;
+  const p = face.lmPts;
+  for (const side of ['L', 'R']) {
+    const a = side === 'L' ? [159, 145, 33, 133] : [386, 374, 362, 263];
+    const cx = (p[a[2]].x + p[a[3]].x) / 2, cy = (p[a[0]].y + p[a[1]].y) / 2;
+    const ew = d2(p[a[2]], p[a[3]]);
+    const open = Math.min(1, eyeOpen(side) / 0.35);
+    const rad = ew * (0.95 + open * 0.6);
+    const mag = 1 + (0.5 + open * 1.3) * P.magAmt;
+    meshWarp(cx, cy, rad, (px, py) => {
+      const dx = px - cx, dy = py - cy, t = Math.hypot(dx, dy) / rad;
+      const f = Math.pow(Math.min(1, t), 1.7);
+      const s = (1 / mag) + (1 - 1 / mag) * f;
+      return [cx + dx * s, cy + dy * s];
+    });
+  }
+}
+
+// funhouse fluid: optical-flow displacement that settles back
+function updateFluid() {
+  flowCtx.save();
+  if (P.mirror) { flowCtx.translate(FLW, 0); flowCtx.scale(-1, 1); }
+  flowCtx.drawImage(video, 0, 0, FLW, flh);
+  flowCtx.restore();
+  const d = flowCtx.getImageData(0, 0, FLW, flh).data, n = FLW * flh;
+  const g = new Float32Array(n);
+  for (let i = 0, j = 0; j < n; i += 4, j++) g[j] = d[i] * 0.299 + d[i + 1] * 0.587 + d[i + 2] * 0.114;
+  if (flowPrev) {
+    const gain = P.fluidForce * 9;
+    for (let y = 1; y < flh - 1; y++) for (let x = 1; x < FLW - 1; x++) {
+      const k = y * FLW + x;
+      const gx = (g[k + 1] - g[k - 1]) * 0.5, gy = (g[k + FLW] - g[k - FLW]) * 0.5;
+      const gt = g[k] - flowPrev[k], f = -gt / (gx * gx + gy * gy + 8);
+      dispX[k] += f * gx * gain; dispY[k] += f * gy * gain;
+    }
+    for (let k = 0; k < n; k++) { dispX[k] *= 0.9; dispY[k] *= 0.9; }
+  }
+  flowPrev = g;
+}
+function renderFluid() {
+  warpCtx.clearRect(0, 0, W, H); warpCtx.drawImage(fb, 0, 0);
+  const cs = W / 48, sxr = FLW / W, syr = flh / H;
+  for (let py = 0; py < H; py += cs) for (let px = 0; px < W; px += cs) {
+    const fx = Math.min(FLW - 1, (px + cs / 2) * sxr | 0), fy = Math.min(flh - 1, (py + cs / 2) * syr | 0);
+    const k = fy * FLW + fx, ox = dispX[k] * (W / FLW), oy = dispY[k] * (H / flh);
+    fctx.drawImage(warpSrc, px - ox, py - oy, cs + 1, cs + 1, px, py, cs + 1, cs + 1);
+  }
+}
+
+// frame-history ring for cubism / time-slice
+function pushHistory() {
+  histRing[histHead].getContext('2d').drawImage(fb, 0, 0);
+  histHead = (histHead + 1) % HIST;
+  if (histHead === 0) histReady = true;
+}
+function histFrame(delay) {
+  const idx = ((histHead - 1 - delay) % HIST + HIST) % HIST;
+  return histRing[idx];
+}
+
+// cubist shard grid
+function renderCubism() {
+  const cols = 10, rows = 8, cw = W / cols, ch = H / rows, t = performance.now() / 1000;
+  const m = 0.3 + (face.motion || 0) * 1.6;
+  octx.fillStyle = '#000'; octx.fillRect(0, 0, W, H);
+  for (let gy = 0; gy < rows; gy++) for (let gx = 0; gx < cols; gx++) {
+    const seed = gx * 7 + gy * 13;
+    const delay = histReady ? Math.floor(prand(seed) * 10) : 0;
+    const src = histFrame(delay);
+    const ang = Math.sin(t * (0.4 + prand(seed) * 1.4) + seed) * 0.5 * P.cubAmt * m;
+    const ox = Math.sin(t * 0.7 + seed) * cw * 0.09 * P.cubAmt, oy = Math.cos(t * 0.6 + seed) * ch * 0.09 * P.cubAmt;
+    octx.save();
+    octx.translate(gx * cw + cw / 2 + ox, gy * ch + ch / 2 + oy);
+    octx.rotate(ang);
+    octx.drawImage(src, gx * cw, gy * ch, cw, ch, -cw / 2 - 1, -ch / 2 - 1, cw + 2, ch + 2);
+    octx.restore();
+  }
+}
+
+// nose/chin paintbrush onto a frozen frame
+function renderPaint() {
+  if (paintReset) { frozenCtx.drawImage(fb, 0, 0); paintCtx.clearRect(0, 0, W, H); paintCtx.drawImage(fb, 0, 0); paintReset = false; }
+  const n = face.lmPts ? face.lmPts[1] : { x: W / 2, y: H / 2 };
+  const br = Math.max(18, (face.s || 200) * 0.16);
+  paintCtx.save();
+  paintCtx.beginPath(); paintCtx.arc(n.x, n.y, br, 0, Math.PI * 2); paintCtx.clip();
+  paintCtx.drawImage(fb, 0, 0);
+  paintCtx.restore();
+  octx.drawImage(paintCanvas, 0, 0);
+}
+
+// kaleidoscope mirrored around the nose
+function renderKaleido() {
+  const c = face.lmPts ? face.lmPts[1] : { x: W / 2, y: H / 2 };
+  const N = Math.max(4, P.kaleidoSeg | 0), seg = Math.PI * 2 / N, R = Math.hypot(W, H);
+  kdCtx.clearRect(0, 0, W, H); kdCtx.drawImage(fb, 0, 0);
+  octx.fillStyle = '#000'; octx.fillRect(0, 0, W, H);
+  for (let i = 0; i < N; i++) {
+    octx.save();
+    octx.translate(c.x, c.y);
+    octx.rotate(i * seg);
+    if (i % 2) octx.scale(1, -1);
+    octx.beginPath(); octx.moveTo(0, 0); octx.arc(0, 0, R, -seg / 2, seg / 2); octx.closePath(); octx.clip();
+    octx.translate(-c.x, -c.y);
+    octx.drawImage(kd, 0, 0);
+    octx.restore();
+  }
+}
+
+// time-slice delay waterfall
+function renderSlice() {
+  const strips = 24, sh = H / strips;
+  for (let i = 0; i < strips; i++) {
+    const src = histReady ? histFrame(i * (P.sliceDelay | 0)) : fb;
+    octx.drawImage(src, 0, i * sh, W, sh + 1, 0, i * sh, W, sh + 1);
+  }
+}
+
+// edge-detection neon + shake particles
+function renderEdge(now) {
+  flowCtx.drawImage(fb, 0, 0, FLW, flh);
+  const d = flowCtx.getImageData(0, 0, FLW, flh).data;
+  const g = new Float32Array(FLW * flh);
+  for (let i = 0, j = 0; j < g.length; i += 4, j++) g[j] = (d[i] + d[i + 1] + d[i + 2]) / 3;
+  const sx = W / FLW, sy = H / flh;
+  octx.save();
+  octx.globalCompositeOperation = 'lighter';
+  const edgePts = [];
+  for (let y = 1; y < flh - 1; y++) for (let x = 1; x < FLW - 1; x++) {
+    const k = y * FLW + x;
+    const gx = (g[k - 1 - FLW] + 2 * g[k - 1] + g[k - 1 + FLW]) - (g[k + 1 - FLW] + 2 * g[k + 1] + g[k + 1 + FLW]);
+    const gy = (g[k - 1 - FLW] + 2 * g[k - FLW] + g[k + 1 - FLW]) - (g[k - 1 + FLW] + 2 * g[k + FLW] + g[k + 1 + FLW]);
+    const mag = Math.hypot(gx, gy);
+    if (mag > 90) {
+      const hue = (Math.atan2(gy, gx) * 180 / Math.PI + 180) | 0;
+      octx.fillStyle = 'hsl(' + hue + ',100%,60%)';
+      octx.fillRect(x * sx, y * sy, sx + 0.6, sy + 0.6);
+      if (edgePts.length < 500) edgePts.push([x * sx, y * sy]);
+    }
+  }
+  octx.restore();
+  // shake -> explode
+  if ((face.shake || 0) > 6 && now - shakePrev > 400 && edgePts.length) {
+    shakePrev = now;
+    for (let n = 0; n < 140; n++) {
+      const e = edgePts[(Math.random() * edgePts.length) | 0];
+      const a = Math.random() * Math.PI * 2, sp = 2 + Math.random() * 6;
+      particles.push({ x: e[0], y: e[1], vx: Math.cos(a) * sp, vy: Math.sin(a) * sp - 2, life: 1, hue: (Math.random() * 360) | 0 });
+    }
+  }
+}
+function updateParticles() {
+  if (!particles.length) return;
+  octx.save();
+  octx.globalCompositeOperation = 'lighter';
+  for (const p of particles) {
+    p.x += p.vx; p.y += p.vy; p.vy += 0.25; p.life -= 0.02;
+    octx.fillStyle = 'hsla(' + p.hue + ',100%,60%,' + Math.max(0, p.life) + ')';
+    octx.fillRect(p.x, p.y, 3, 3);
+  }
+  octx.restore();
+  particles = particles.filter(p => p.life > 0 && p.y < H + 20);
+}
+
+// laser eyes with bounce
+function renderLaser() {
+  if (!face.lmPts) return;
+  const p = face.lmPts, fc = { x: face.x, y: face.y };
+  for (const [iris, inn, out, col] of [[468, 33, 133, '#ff3b6b'], [473, 362, 263, '#3bd1ff']]) {
+    const ec = { x: (p[inn].x + p[out].x) / 2, y: (p[inn].y + p[out].y) / 2 };
+    let dx = (p[iris].x - ec.x) * 8 + (ec.x - fc.x) * 0.6;
+    let dy = (p[iris].y - ec.y) * 8 + (ec.y - fc.y) * 0.6 + 8;
+    const L = Math.hypot(dx, dy) || 1; dx /= L; dy /= L;
+    let x = ec.x, y = ec.y, len = 0, bounces = 0;
+    octx.save();
+    octx.strokeStyle = col; octx.lineWidth = 3; octx.shadowColor = col; octx.shadowBlur = 14;
+    octx.beginPath(); octx.moveTo(x, y);
+    while (len < W * 2.5 && bounces < 6) {
+      x += dx * 10; y += dy * 10; len += 10;
+      if (x < 0 || x > W) { dx = -dx; x = Math.max(0, Math.min(W, x)); bounces++; }
+      if (y < 0 || y > H) { dy = -dy; y = Math.max(0, Math.min(H, y)); bounces++; }
+      octx.lineTo(x, y);
+    }
+    octx.stroke(); octx.restore();
+  }
+}
+
+// pixel-sort the face region (fired on a blink)
+function pixelSortFace() {
+  if (!face.visible) return;
+  const bx = Math.max(0, (face.x - face.s * 0.5) | 0), by = Math.max(0, (face.y - face.s * 0.5) | 0);
+  const bw = Math.min(W - bx, face.s | 0), bh = Math.min(H - by, (face.s * 1.15) | 0);
+  if (bw < 4 || bh < 4) return;
+  rctx.drawImage(fb, 0, 0);
+  const img = rctx.getImageData(bx, by, bw, bh), a = img.data;
+  for (let x = 0; x < bw; x++) {
+    const col = [];
+    for (let y = 0; y < bh; y++) { const i = (y * bw + x) * 4; col.push([a[i], a[i + 1], a[i + 2], a[i] * 0.299 + a[i + 1] * 0.587 + a[i + 2] * 0.114]); }
+    col.sort((u, v) => u[3] - v[3]);
+    for (let y = 0; y < bh; y++) { const i = (y * bw + x) * 4; a[i] = col[y][0]; a[i + 1] = col[y][1]; a[i + 2] = col[y][2]; }
+  }
+  rctx.putImageData(img, bx, by);
+  fctx.drawImage(readCanvas, bx, by, bw, bh, bx, by, bw, bh);
+}
+
+// mic / voice level
+async function startMic() {
+  if (micOn) return;
+  try {
+    const s = await navigator.mediaDevices.getUserMedia({ audio: true });
+    const ac = new (window.AudioContext || window.webkitAudioContext)();
+    const src = ac.createMediaStreamSource(s);
+    analyser = ac.createAnalyser(); analyser.fftSize = 512;
+    audioData = new Uint8Array(analyser.frequencyBinCount);
+    src.connect(analyser); micOn = true;
+  } catch (e) {
+    console.error('mic error:', e); P.voice = false; $('voiceBtn').classList.remove('active');
+    setFxStatus('mic unavailable');
+  }
+}
+function updateAudio(now) {
+  if (!analyser) { audioLevel *= 0.9; return; }
+  analyser.getByteTimeDomainData(audioData);
+  let sum = 0;
+  for (let i = 0; i < audioData.length; i++) { const v = (audioData[i] - 128) / 128; sum += v * v; }
+  const rms = Math.sqrt(sum / audioData.length);
+  audioLevel += (Math.min(1, rms * 3.5) - audioLevel) * 0.35;
+  if (audioLevel > 0.55 && now > _glCd) { glitchFrames = Math.max(glitchFrames, 8); _glCd = now + 220; }
+}
+
+// per-frame trigger detection (blink)
+function updateTriggers(now) {
+  if (!face.lmPts) return;
+  const eo = (eyeOpen('L') + eyeOpen('R')) / 2;
+  if (eyeOpenPrev > 0.18 && eo < 0.10) blinkFire = now;
+  eyeOpenPrev = eo;
 }
 
 // ---------- record / snapshot ----------

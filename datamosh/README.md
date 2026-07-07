@@ -73,6 +73,19 @@ Pressing **keyframe** injects a clean frame (an I-frame), resetting the smear.
 | echo fade / echo spin | Trail opacity and per-frame rotation |
 | ascii size | Character cell size (smaller = more detail, heavier) |
 | slit speed | Columns captured per frame (how fast the time-smear scrolls) |
+| `fluid` (U) | Funhouse liquid — optical-flow displacement pushes pixels like paint and slowly settles back |
+| `cubism` (C) | Slices the feed into a grid of shards, each rotated/offset/time-delayed by your movement |
+| `vortex` (V) | Mouth black hole — the wider you open, the harder it sucks and swirls your face in (precise) |
+| `mag eyes` (Y) | Magnifying-glass bulge on each eye, scaled by how wide you open them (precise) |
+| `kaleido` (K) | Kaleidoscope mirrored across N segments, centered on your nose (precise) |
+| `slice` (N) | Time-slice waterfall — horizontal strips each delayed a few frames, melting on sideways motion |
+| `paint` (B) | Freezes the frame; your nose paints the live video back in wherever you move (precise) |
+| `edge` (X) | Neon edge-detect outlines; shake your head to explode them into physics particles |
+| `voice` (J) | Mic loudness drives datamosh intensity — shout to tear it apart |
+| `laser` (Z) | Neon laser beams from your eyes that bounce off the screen edges (precise) |
+| `blink sort` (Q) | Pixel-sorts your face into melting brightness columns on a blink (precise) |
+| fluid force / cubism amt / vortex amt / eye magnify | Strength of each warp |
+| kaleido segments / slice delay | Kaleidoscope mirror count / frames of delay per strip |
 | orb warp | Radial curve of the orb — low = rim-heavy fisheye, high = pinched center |
 | orb spin | Continuous rotation speed (revolutions/s, negative = counter-clockwise) |
 | feature spin | Speed multiplier for dissect's spinning features |
