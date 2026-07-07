@@ -65,6 +65,14 @@ Pressing **keyframe** injects a clean frame (an I-frame), resetting the smear.
 | `+ map a face` | Upload one or more face photos, warped live onto every detected face via an 852-triangle FaceMesh mesh (precise). Multiple photos are distributed across the people in frame. `clear` removes them. |
 | map blend | Opacity of the mapped face over your real face |
 | map feather | Softness of the mapped face's edge — 0 = hard cutout, 1 = soft blend into your skin |
+| `gate` (E) | Motion-triggered mosh — only moshes when you move; still moments stay crisp |
+| `echo` (F) | Feedback trails — overlays the previous frame rotated/zoomed/faded for psychedelic spirals |
+| `ascii` (A) | Renders the feed as real-time colored text characters |
+| `slit` (L) | Slit-scan — stacks one column per frame so moving objects stretch across time |
+| motion gate | How much movement is needed before moshing kicks in (lower = more sensitive) |
+| echo fade / echo spin | Trail opacity and per-frame rotation |
+| ascii size | Character cell size (smaller = more detail, heavier) |
+| slit speed | Columns captured per frame (how fast the time-smear scrolls) |
 | orb warp | Radial curve of the orb — low = rim-heavy fisheye, high = pinched center |
 | orb spin | Continuous rotation speed (revolutions/s, negative = counter-clockwise) |
 | feature spin | Speed multiplier for dissect's spinning features |

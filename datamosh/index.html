@@ -125,6 +125,13 @@
   </div>
   <input type="file" id="faceFile" accept="image/*" multiple style="display:none">
 
+  <div class="row">
+    <button id="gateBtn" title="Only mosh when you move quickly; still moments stay crisp">gate</button>
+    <button id="echoBtn" title="Feedback trails (delay + rotation + fade)">echo</button>
+    <button id="asciiBtn" title="Render as colored text characters">ascii</button>
+    <button id="slitBtn" title="Slit-scan time smear">slit</button>
+  </div>
+
   <div id="fxStatus" style="color:var(--dim); min-height:1.2em; margin-top:-6px;">tracker: fast (offline)</div>
 
   <div class="ctl">
@@ -167,6 +174,26 @@
     <label>map feather <output id="featherV">0.60</output></label>
     <input type="range" id="feather" min="0" max="1" step="0.05" value="0.6">
   </div>
+  <div class="ctl">
+    <label>motion gate <output id="gateThreshV">0.020</output></label>
+    <input type="range" id="gateThresh" min="0.005" max="0.1" step="0.005" value="0.02">
+  </div>
+  <div class="ctl">
+    <label>echo fade <output id="echoFadeV">0.50</output></label>
+    <input type="range" id="echoFade" min="0" max="0.95" step="0.05" value="0.5">
+  </div>
+  <div class="ctl">
+    <label>echo spin <output id="echoSpinV">2</output></label>
+    <input type="range" id="echoSpin" min="-8" max="8" step="0.5" value="2">
+  </div>
+  <div class="ctl">
+    <label>ascii size <output id="asciiSizeV">10</output></label>
+    <input type="range" id="asciiSize" min="5" max="22" step="1" value="10">
+  </div>
+  <div class="ctl">
+    <label>slit speed <output id="slitSpeedV">2</output></label>
+    <input type="range" id="slitSpeed" min="1" max="8" step="1" value="2">
+  </div>
 
   <label class="check"><input type="checkbox" id="mirror" checked> mirror</label>
 
@@ -179,7 +206,9 @@
 
   <div class="keys">
     <b>space</b> keyframe &nbsp; <b>M</b> mosh &nbsp; <b>G</b> glitch<br>
-    <b>O</b> orb &nbsp; <b>H</b> scan &nbsp; <b>D</b> dissect<br>
+    <b>O</b> orb &nbsp; <b>H</b> scan &nbsp; <b>D</b> dissect &nbsp; <b>P</b> precise<br>
+    <b>T</b> react &nbsp; <b>I</b> iris &nbsp; <b>W</b> swap<br>
+    <b>E</b> gate &nbsp; <b>F</b> echo &nbsp; <b>A</b> ascii &nbsp; <b>L</b> slit<br>
     <b>R</b> record &nbsp; <b>S</b> snapshot
   </div>
 </div>
@@ -209,6 +238,15 @@ const P = {
   faceMap: false,// map an uploaded face onto the live face (precise)
   blend: 0.9,    // face-map opacity
   feather: 0.6,  // face-map edge softness
+  gate: false,   // motion-triggered mosh (still = crisp)
+  gateThresh: 0.02, // global-motion threshold to start moshing
+  echo: false,   // feedback trails
+  echoFade: 0.5, // echo overlay opacity
+  echoSpin: 2,   // echo rotation per frame (degrees)
+  ascii: false,  // render as colored text
+  asciiSize: 10, // ascii cell size (px)
+  slit: false,   // slit-scan time smear
+  slitSpeed: 2,  // columns captured per frame
 };
 
 const MW = 160;              // motion-estimation width (small grayscale grid)
@@ -240,6 +278,17 @@ let orbAngle, orbRow, orbMirrorLUT, orbOut; // precomputed per-pixel mapping
 const readCanvas = document.createElement('canvas');  // fb copy for pixel reads
 const rctx = readCanvas.getContext('2d', { willReadFrequently: true });
 
+// buffers for gate / echo / slit-scan
+const gmCanvas = document.createElement('canvas');   // downscaled global-motion probe
+const gmCtx = gmCanvas.getContext('2d', { willReadFrequently: true });
+let gmPrev = null, gmMotion = 0;
+const echoCanvas = document.createElement('canvas'); // last composited frame (trails)
+const echoCtx = echoCanvas.getContext('2d');
+const slitCanvas = document.createElement('canvas'); // stacked slit-scan columns
+const slitCtx = slitCanvas.getContext('2d');
+const slitTmp = document.createElement('canvas');
+const slitTmpCtx = slitTmp.getContext('2d');
+
 // ---------- UI wiring ----------
 const $ = id => document.getElementById(id);
 const status = $('status');
@@ -263,6 +312,11 @@ bindSlider('spin', 'spin', v => v.toFixed(2));
 bindSlider('dspeed', 'dspeed', v => v.toFixed(1));
 bindSlider('blend', 'blend', v => v.toFixed(2));
 bindSlider('feather', 'feather', v => v.toFixed(2));
+bindSlider('gateThresh', 'gateThresh', v => v.toFixed(3));
+bindSlider('echoFade', 'echoFade', v => v.toFixed(2));
+bindSlider('echoSpin', 'echoSpin', v => v.toFixed(1));
+bindSlider('asciiSize', 'asciiSize', v => v | 0);
+bindSlider('slitSpeed', 'slitSpeed', v => v | 0);
 $('warp').addEventListener('input', () => { orbMapDirty = true; });
 
 $('mirror').addEventListener('change', e => { P.mirror = e.target.checked; needKeyframe = true; });
@@ -310,6 +364,17 @@ $('swapBtn').addEventListener('click', () => {
   $('swapBtn').classList.toggle('active', P.swap);
   if (P.swap) needPrecise();
 });
+function toggleBtn(id, key) {
+  $(id).addEventListener('click', () => {
+    P[key] = !P[key];
+    $(id).classList.toggle('active', P[key]);
+  });
+}
+toggleBtn('gateBtn', 'gate');
+toggleBtn('echoBtn', 'echo');
+toggleBtn('asciiBtn', 'ascii');
+toggleBtn('slitBtn', 'slit');
+
 $('addFaceBtn').addEventListener('click', () => $('faceFile').click());
 $('faceFile').addEventListener('change', e => {
   if (e.target.files && e.target.files.length) handleFaceUpload(e.target.files);
@@ -333,6 +398,10 @@ addEventListener('keydown', e => {
     case 'KeyT': $('reactBtn').click(); break;
     case 'KeyI': $('irisBtn').click(); break;
     case 'KeyW': $('swapBtn').click(); break;
+    case 'KeyE': $('gateBtn').click(); break;
+    case 'KeyF': $('echoBtn').click(); break;
+    case 'KeyA': $('asciiBtn').click(); break;
+    case 'KeyL': $('slitBtn').click(); break;
     case 'KeyR': toggleRecord(); break;
     case 'KeyS': snapshot(); break;
   }
@@ -369,8 +438,12 @@ function setupSizes(w, h) {
   out.height = fb.height = tmp.height = H;
   small.width = MW; small.height = MH;
   readCanvas.width = W; readCanvas.height = H;
+  echoCanvas.width = W; echoCanvas.height = H;
+  slitCanvas.width = W; slitCanvas.height = H;
+  slitTmp.width = W; slitTmp.height = H;
   grayCur = new Uint8ClampedArray(MW * MH);
   grayPrev = new Uint8ClampedArray(MW * MH);
+  gmPrev = null;
   orbMapDirty = true;
   needKeyframe = true;
 }
@@ -445,8 +518,11 @@ function tick(now) {
     computeFaceMotion(now);
   }
 
+  // motion gate: when the frame is nearly still, keep it crisp (no mosh)
+  const still = P.gate && globalMotion() < P.gateThresh;
+
   const autoDue = P.autoKey > 0 && now - lastKeyTime > P.autoKey * 1000;
-  if (needKeyframe || autoDue || !P.mosh) {
+  if (needKeyframe || autoDue || !P.mosh || still) {
     drawFrame(fctx, 1);
     readGray(grayPrev);
     needKeyframe = false;
@@ -461,10 +537,15 @@ function tick(now) {
   if (P.iris) applyIris(now);
   if (P.dissect) applyDissect(now);
 
-  if (P.orb) renderOrb(now);
+  if (P.echo) applyEcho();
+
+  // display mode (slit / ascii / orb / normal)
+  if (P.slit) renderSlit();
+  else if (P.ascii) renderAscii();
+  else if (P.orb) renderOrb(now);
   else octx.drawImage(fb, 0, 0);
 
-  if (P.scan) drawScanHUD(now);
+  if (P.scan && !P.ascii && !P.slit) drawScanHUD(now);
 
   frames++;
   if (now - lastFps > 1000) {
@@ -1272,6 +1353,79 @@ function drawScanHUD(now) {
   octx.restore();
 }
 
+// ---------- motion gate ----------
+// mean absolute frame difference on a tiny grayscale probe (0 = still)
+function globalMotion() {
+  const gw = 80, gh = Math.max(1, Math.round(80 * H / W));
+  if (gmCanvas.width !== gw || gmCanvas.height !== gh) { gmCanvas.width = gw; gmCanvas.height = gh; gmPrev = null; }
+  gmCtx.drawImage(video, 0, 0, gw, gh);
+  const d = gmCtx.getImageData(0, 0, gw, gh).data;
+  const n = gw * gh;
+  if (!gmPrev || gmPrev.length !== n) {
+    gmPrev = new Uint8Array(n);
+    for (let i = 0, j = 0; j < n; i += 4, j++) gmPrev[j] = (d[i] + d[i + 1] + d[i + 2]) / 3;
+    return gmMotion;
+  }
+  let sum = 0;
+  for (let i = 0, j = 0; j < n; i += 4, j++) {
+    const g = (d[i] + d[i + 1] + d[i + 2]) / 3;
+    sum += Math.abs(g - gmPrev[j]);
+    gmPrev[j] = g;
+  }
+  gmMotion = (sum / n) / 255;
+  return gmMotion;
+}
+
+// ---------- echo: feedback trails ----------
+function applyEcho() {
+  fctx.save();
+  fctx.globalAlpha = P.echoFade;
+  fctx.translate(W / 2, H / 2);
+  fctx.rotate(P.echoSpin * Math.PI / 180);
+  fctx.scale(1.03, 1.03);            // slight zoom -> infinite-tunnel trails
+  fctx.translate(-W / 2, -H / 2);
+  fctx.drawImage(echoCanvas, 0, 0);
+  fctx.restore();
+  echoCtx.drawImage(fb, 0, 0);       // remember this composite for next frame
+}
+
+// ---------- ascii: colored text render ----------
+const ASCII_RAMP = ' .:-=+*#%@';
+function renderAscii() {
+  const cs = Math.max(5, P.asciiSize | 0);
+  const cols = Math.floor(W / cs), rows = Math.floor(H / cs);
+  rctx.drawImage(fb, 0, 0);
+  const d = rctx.getImageData(0, 0, W, H).data;
+  octx.fillStyle = '#000';
+  octx.fillRect(0, 0, W, H);
+  octx.textBaseline = 'top';
+  octx.font = cs + 'px ui-monospace, monospace';
+  const rl = ASCII_RAMP.length;
+  for (let gy = 0; gy < rows; gy++) {
+    const py = gy * cs + (cs >> 1);
+    for (let gx = 0; gx < cols; gx++) {
+      const px = gx * cs + (cs >> 1);
+      const i = (py * W + px) * 4, r = d[i], g = d[i + 1], b = d[i + 2];
+      const lum = (r * 0.299 + g * 0.587 + b * 0.114) / 255;
+      const ci = Math.min(rl - 1, (lum * rl) | 0);
+      if (ci === 0) continue; // darkest -> leave black
+      octx.fillStyle = 'rgb(' + r + ',' + g + ',' + b + ')';
+      octx.fillText(ASCII_RAMP[ci], gx * cs, gy * cs);
+    }
+  }
+}
+
+// ---------- slit-scan: stack one column per frame ----------
+function renderSlit() {
+  const k = Math.max(1, P.slitSpeed | 0);
+  slitTmpCtx.clearRect(0, 0, W, H);
+  slitTmpCtx.drawImage(slitCanvas, 0, 0);
+  slitCtx.clearRect(0, 0, W, H);
+  slitCtx.drawImage(slitTmp, -k, 0);                 // scroll history left
+  slitCtx.drawImage(fb, W >> 1, 0, 1, H, W - k, 0, k, H); // append center column at right
+  octx.drawImage(slitCanvas, 0, 0);
+}
+
 // ---------- record / snapshot ----------
 let recorder = null, chunks = [];
 
@@ -1321,6 +1475,7 @@ window._dbg = () => ({
   react: P.react, iris: P.iris, swap: P.swap, faceMap: P.faceMap,
   faces: faceList.length, maps: faceMaps.length,
   oval: FACE_OVAL ? FACE_OVAL.length : 0, tris: TRIANGLES ? TRIANGLES.length : 0,
+  gate: P.gate, gmMotion: +gmMotion.toFixed(4), echo: P.echo, ascii: P.ascii, slit: P.slit,
 });
 window._getMaps = () => faceMaps; // debug: current source faces
 startCamera();
