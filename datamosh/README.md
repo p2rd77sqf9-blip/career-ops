@@ -62,7 +62,9 @@ Pressing **keyframe** injects a clean frame (an I-frame), resetting the smear.
 | `react` (T) | Ties glitch intensity to motion — the more your face moves, the more the smear and chaos ramp up, with auto glitch bursts on fast moves. Works with either tracker. |
 | `iris` (I) | Swirls each iris/eye region, spinning fast (precise; uses the iris landmarks) |
 | `swap` (W) | Swaps your eyes and mouth — mouth is composited onto both eyes and an eye onto the mouth (precise) |
-| `+ map a face` | Upload a photo of someone's face and it's warped live onto yours via an 852-triangle FaceMesh mesh (precise). `clear` removes it. |
+| `+ map a face` | Upload one or more face photos, warped live onto every detected face via an 852-triangle FaceMesh mesh (precise). Multiple photos are distributed across the people in frame. `clear` removes them. |
+| map blend | Opacity of the mapped face over your real face |
+| map feather | Softness of the mapped face's edge — 0 = hard cutout, 1 = soft blend into your skin |
 | orb warp | Radial curve of the orb — low = rim-heavy fisheye, high = pinched center |
 | orb spin | Continuous rotation speed (revolutions/s, negative = counter-clockwise) |
 | feature spin | Speed multiplier for dissect's spinning features |

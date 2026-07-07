@@ -123,7 +123,7 @@
     <button id="addFaceBtn" title="Upload a face photo to map onto yours (precise)">+ map a face</button>
     <button id="clearFaceBtn" title="Remove the mapped face" disabled>clear</button>
   </div>
-  <input type="file" id="faceFile" accept="image/*" style="display:none">
+  <input type="file" id="faceFile" accept="image/*" multiple style="display:none">
 
   <div id="fxStatus" style="color:var(--dim); min-height:1.2em; margin-top:-6px;">tracker: fast (offline)</div>
 
@@ -158,6 +158,14 @@
   <div class="ctl">
     <label>feature spin <output id="dspeedV">1.0</output></label>
     <input type="range" id="dspeed" min="0" max="3" step="0.1" value="1">
+  </div>
+  <div class="ctl">
+    <label>map blend <output id="blendV">0.90</output></label>
+    <input type="range" id="blend" min="0" max="1" step="0.05" value="0.9">
+  </div>
+  <div class="ctl">
+    <label>map feather <output id="featherV">0.60</output></label>
+    <input type="range" id="feather" min="0" max="1" step="0.05" value="0.6">
   </div>
 
   <label class="check"><input type="checkbox" id="mirror" checked> mirror</label>
@@ -199,6 +207,8 @@ const P = {
   iris: false,   // spin the irises (precise)
   swap: false,   // swap eyes and mouth (precise)
   faceMap: false,// map an uploaded face onto the live face (precise)
+  blend: 0.9,    // face-map opacity
+  feather: 0.6,  // face-map edge softness
 };
 
 const MW = 160;              // motion-estimation width (small grayscale grid)
@@ -251,6 +261,8 @@ bindSlider('autoKey', 'autoKey', v => v === 0 ? 'off' : v + 's');
 bindSlider('warp', 'warp', v => v.toFixed(2));
 bindSlider('spin', 'spin', v => v.toFixed(2));
 bindSlider('dspeed', 'dspeed', v => v.toFixed(1));
+bindSlider('blend', 'blend', v => v.toFixed(2));
+bindSlider('feather', 'feather', v => v.toFixed(2));
 $('warp').addEventListener('input', () => { orbMapDirty = true; });
 
 $('mirror').addEventListener('change', e => { P.mirror = e.target.checked; needKeyframe = true; });
@@ -300,7 +312,8 @@ $('swapBtn').addEventListener('click', () => {
 });
 $('addFaceBtn').addEventListener('click', () => $('faceFile').click());
 $('faceFile').addEventListener('change', e => {
-  if (e.target.files && e.target.files[0]) handleFaceUpload(e.target.files[0]);
+  if (e.target.files && e.target.files.length) handleFaceUpload(e.target.files);
+  e.target.value = ''; // allow re-selecting the same file
 });
 $('clearFaceBtn').addEventListener('click', clearFaceMap);
 
@@ -689,7 +702,8 @@ const updateMemory = pico.instantiate_detection_memory(4);
 const featSrc = document.createElement('canvas'); // clean mirrored frame for dissect patches
 const featCtx = featSrc.getContext('2d');
 const face = { x: 0, y: 0, s: 0, q: 0, seen: -1e9, visible: false, precise: false, lmPts: null, motion: 0 };
-window._face = face; // exposed for debugging
+let faceList = []; // all detected faces (precise mode), biggest first
+window._face = face; window._P = P; // exposed for debugging
 const SUBJ_ID = (Math.random() * 0xffff | 0).toString(16).toUpperCase().padStart(4, '0');
 
 /* facefinder cascade from https://github.com/nenadmarkus/pico (see repo for license) */
@@ -714,7 +728,7 @@ const MP_WASM_BASE  = MP.wasm   || `https://cdn.jsdelivr.net/npm/@mediapipe/task
 const MP_MODEL_URL  = MP.model  || 'https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task';
 
 let faceLandmarker = null, mpReady = false, mpLoading = false, mpTs = 0;
-let mpVision = null, mpFileset = null, imgLandmarker = null, TRIANGLES = null;
+let mpVision = null, mpFileset = null, imgLandmarker = null, TRIANGLES = null, FACE_OVAL = null;
 const mpCanvas = document.createElement('canvas');
 const mpCtx = mpCanvas.getContext('2d', { willReadFrequently: true });
 
@@ -733,7 +747,7 @@ async function loadMediaPipe() {
         faceLandmarker = await vision.FaceLandmarker.createFromOptions(fileset, {
           baseOptions: { modelAssetPath: MP_MODEL_URL, delegate },
           runningMode: 'VIDEO',
-          numFaces: 1,
+          numFaces: 5,
         });
         lastErr = null;
         break;
@@ -743,6 +757,7 @@ async function loadMediaPipe() {
     mpVision = vision;
     mpFileset = fileset;
     TRIANGLES = buildTriangles(vision.FaceLandmarker.FACE_LANDMARKS_TESSELATION);
+    FACE_OVAL = orderLoop(vision.FaceLandmarker.FACE_LANDMARKS_FACE_OVAL);
     mpReady = true;
     setFxStatus('tracker: precise FaceMesh ✓');
   } catch (e) {
@@ -793,25 +808,32 @@ function updateFaceMP(now) {
   mpTs = Math.max(mpTs + 1, Math.round(now));
   let res;
   try { res = faceLandmarker.detectForVideo(mpCanvas, mpTs); }
-  catch (e) { face.visible = now - face.seen < 700; return; }
+  catch (e) { face.visible = now - face.seen < 700; faceList = []; return; }
 
-  if (res && res.faceLandmarks && res.faceLandmarks.length) {
-    const lm = res.faceLandmarks[0];
-    const pts = new Array(lm.length);
-    let minx = 1e9, miny = 1e9, maxx = -1e9, maxy = -1e9;
-    for (let i = 0; i < lm.length; i++) {
-      const x = lm[i].x * W, y = lm[i].y * H;
-      pts[i] = { x, y };
-      if (x < minx) minx = x; if (x > maxx) maxx = x;
-      if (y < miny) miny = y; if (y > maxy) maxy = y;
+  const list = [];
+  if (res && res.faceLandmarks) {
+    for (const lm of res.faceLandmarks) {
+      const pts = new Array(lm.length);
+      let minx = 1e9, miny = 1e9, maxx = -1e9, maxy = -1e9;
+      for (let i = 0; i < lm.length; i++) {
+        const x = lm[i].x * W, y = lm[i].y * H;
+        pts[i] = { x, y };
+        if (x < minx) minx = x; if (x > maxx) maxx = x;
+        if (y < miny) miny = y; if (y > maxy) maxy = y;
+      }
+      list.push({ lmPts: pts, x: (minx + maxx) / 2, y: (miny + maxy) / 2, s: Math.max(maxx - minx, maxy - miny) * 1.15 });
     }
-    face.lmPts = pts;
+  }
+  list.sort((a, b) => b.s - a.s); // biggest face is primary
+  faceList = list;
+
+  if (list.length) {
+    const p = list[0];
+    face.lmPts = p.lmPts;
     face.precise = true;
-    const cx = (minx + maxx) / 2, cy = (miny + maxy) / 2;
-    const s = Math.max(maxx - minx, maxy - miny) * 1.15;
     if (face.visible) {
-      face.x += (cx - face.x) * 0.5; face.y += (cy - face.y) * 0.5; face.s += (s - face.s) * 0.5;
-    } else { face.x = cx; face.y = cy; face.s = s; }
+      face.x += (p.x - face.x) * 0.5; face.y += (p.y - face.y) * 0.5; face.s += (p.s - face.s) * 0.5;
+    } else { face.x = p.x; face.y = p.y; face.s = p.s; }
     face.q = 60; // landmark tracking is high-confidence
     face.seen = now;
   }
@@ -858,6 +880,7 @@ function updateFace(now) {
     face.seen = now;
   }
   face.visible = now - face.seen < 700;
+  faceList = face.visible ? [{ lmPts: null, x: face.x, y: face.y, s: face.s }] : [];
 }
 
 function faceFeatures() {
@@ -886,6 +909,17 @@ function buildTriangles(tess) {
       tris.push([a.start, a.end, b.end]);
   }
   return tris;
+}
+
+// order a connection loop (e.g. face oval) into a sequence of vertex indices
+function orderLoop(conns) {
+  const nxt = new Map();
+  for (const c of conns) nxt.set(c.start, c.end);
+  const start = conns[0].start;
+  const out = [];
+  let cur = start;
+  do { out.push(cur); cur = nxt.get(cur); } while (cur !== undefined && cur !== start && out.length <= conns.length);
+  return out;
 }
 
 // clean, mirrored copy of the current frame — drawn at most once per tick,
@@ -964,8 +998,13 @@ function applySwap(now) {
   drawRelocate(e1, m0, 1.25);   // eye -> mouth
 }
 
-// ---------- face map: warp an uploaded face onto the live face ----------
-const faceMap = { img: null, srcLm: null, name: '' };
+// ---------- face map: warp uploaded face(s) onto the live face(s) ----------
+// Supports multiple source faces (distributed across detected faces) and
+// multiple detected faces. Each mapped face is rendered into an offscreen
+// canvas and feathered along the face oval so it blends into real skin.
+let faceMaps = [];   // [{ img, srcLm, name }]
+const mapCanvas = document.createElement('canvas');
+const mapCtx = mapCanvas.getContext('2d');
 
 function loadImage(file) {
   return new Promise((resolve, reject) => {
@@ -996,32 +1035,39 @@ async function detectImageLandmarks(img) {
   return res.faceLandmarks[0].map(p => ({ x: p.x * w, y: p.y * h }));
 }
 
-async function handleFaceUpload(file) {
-  setFxStatus('loading face image…');
-  try {
-    const img = await loadImage(file);
-    await loadMediaPipe();
-    if (!mpReady) { setFxStatus('face map needs FaceMesh (serve over http / online)'); return; }
-    const lm = await detectImageLandmarks(img);
-    if (!lm) { setFxStatus('no face found in that image — try another'); return; }
-    faceMap.img = img;
-    faceMap.srcLm = lm;
-    faceMap.name = file.name;
+async function handleFaceUpload(files) {
+  const list = Array.from(files);
+  setFxStatus('loading face image' + (list.length > 1 ? 's' : '') + '…');
+  await loadMediaPipe();
+  if (!mpReady) { setFxStatus('face map needs FaceMesh (serve over http / online)'); return; }
+  let added = 0, failed = 0;
+  for (const file of list) {
+    try {
+      const img = await loadImage(file);
+      const lm = await detectImageLandmarks(img);
+      if (!lm) { failed++; continue; }
+      faceMaps.push({ img, srcLm: lm, name: file.name });
+      added++;
+    } catch (e) { console.error(e); failed++; }
+  }
+  if (faceMaps.length) {
     P.faceMap = true;
     if (!P.precise) { P.precise = true; $('preciseBtn').classList.add('active'); }
     $('addFaceBtn').classList.add('active');
+    $('addFaceBtn').textContent = faceMaps.length + ' face' + (faceMaps.length > 1 ? 's ✓' : ' ✓');
     $('clearFaceBtn').disabled = false;
-    setFxStatus('face mapped: ' + file.name + ' ✓');
-  } catch (e) {
-    console.error(e);
-    setFxStatus('could not map that image');
+    setFxStatus('mapped ' + faceMaps.length + ' face' + (faceMaps.length > 1 ? 's' : '') +
+      (failed ? ' (' + failed + ' had no face)' : '') + ' ✓');
+  } else {
+    setFxStatus('no face found in ' + (list.length > 1 ? 'those images' : 'that image') + ' — try another');
   }
 }
 
 function clearFaceMap() {
-  faceMap.img = null; faceMap.srcLm = null; faceMap.name = '';
+  faceMaps = [];
   P.faceMap = false;
   $('addFaceBtn').classList.remove('active');
+  $('addFaceBtn').textContent = '+ map a face';
   $('clearFaceBtn').disabled = true;
   setFxStatus(mpReady ? 'tracker: precise FaceMesh ✓' : 'tracker: fast (offline)');
 }
@@ -1037,21 +1083,55 @@ function affineTri(s0, s1, s2, d0, d1, d2) {
   return [a, b, c, d, d2.x - a * s2.x - c * s2.y, d2.y - b * s2.x - d * s2.y];
 }
 
-function drawFaceMap() {
-  if (!faceMap.img || !face.precise || !face.lmPts || !TRIANGLES) return;
-  const S = faceMap.srcLm, D = face.lmPts, img = faceMap.img;
+// warp one source face onto one set of destination landmarks, feathered
+function warpFaceOnto(src, D, size) {
+  if (mapCanvas.width !== W || mapCanvas.height !== H) { mapCanvas.width = W; mapCanvas.height = H; }
+  const S = src.srcLm, img = src.img;
+  mapCtx.setTransform(1, 0, 0, 1, 0, 0);
+  mapCtx.globalCompositeOperation = 'source-over';
+  mapCtx.filter = 'none';
+  mapCtx.clearRect(0, 0, W, H);
+
   for (let t = 0; t < TRIANGLES.length; t++) {
     const [i, j, k] = TRIANGLES[t];
     const s0 = S[i], s1 = S[j], s2 = S[k], d0 = D[i], d1 = D[j], d2 = D[k];
     const m = affineTri(s0, s1, s2, d0, d1, d2);
     if (!m) continue;
-    fctx.save();
-    fctx.beginPath();
-    fctx.moveTo(d0.x, d0.y); fctx.lineTo(d1.x, d1.y); fctx.lineTo(d2.x, d2.y); fctx.closePath();
-    fctx.clip();
-    fctx.transform(m[0], m[1], m[2], m[3], m[4], m[5]);
-    fctx.drawImage(img, 0, 0);
-    fctx.restore();
+    mapCtx.save();
+    mapCtx.beginPath();
+    mapCtx.moveTo(d0.x, d0.y); mapCtx.lineTo(d1.x, d1.y); mapCtx.lineTo(d2.x, d2.y); mapCtx.closePath();
+    mapCtx.clip();
+    mapCtx.setTransform(m[0], m[1], m[2], m[3], m[4], m[5]);
+    mapCtx.drawImage(img, 0, 0);
+    mapCtx.restore();
+  }
+
+  // feather: keep only a blurred face-oval region (soft alpha edge)
+  if (FACE_OVAL && P.feather > 0) {
+    mapCtx.globalCompositeOperation = 'destination-in';
+    mapCtx.filter = 'blur(' + Math.max(1, size * 0.13 * P.feather) + 'px)';
+    mapCtx.beginPath();
+    for (let n = 0; n < FACE_OVAL.length; n++) {
+      const p = D[FACE_OVAL[n]];
+      n ? mapCtx.lineTo(p.x, p.y) : mapCtx.moveTo(p.x, p.y);
+    }
+    mapCtx.closePath();
+    mapCtx.fill();
+    mapCtx.filter = 'none';
+    mapCtx.globalCompositeOperation = 'source-over';
+  }
+
+  fctx.globalAlpha = P.blend;
+  fctx.drawImage(mapCanvas, 0, 0);
+  fctx.globalAlpha = 1;
+}
+
+function drawFaceMap() {
+  if (!faceMaps.length || !TRIANGLES || !faceList.length) return;
+  for (let i = 0; i < faceList.length; i++) {
+    const f = faceList[i];
+    if (!f.lmPts) continue;
+    warpFaceOnto(faceMaps[i % faceMaps.length], f.lmPts, f.s);
   }
 }
 
@@ -1239,8 +1319,10 @@ function stamp() {
 window._dbg = () => ({
   precise: face.precise, lm: face.lmPts ? face.lmPts.length : 0, motion: +(face.motion || 0).toFixed(3),
   react: P.react, iris: P.iris, swap: P.swap, faceMap: P.faceMap,
-  srcLm: faceMap.srcLm ? faceMap.srcLm.length : 0, tris: TRIANGLES ? TRIANGLES.length : 0,
+  faces: faceList.length, maps: faceMaps.length,
+  oval: FACE_OVAL ? FACE_OVAL.length : 0, tris: TRIANGLES ? TRIANGLES.length : 0,
 });
+window._getMaps = () => faceMaps; // debug: current source faces
 startCamera();
 requestAnimationFrame(tick);
 </script>
