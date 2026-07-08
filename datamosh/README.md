@@ -62,7 +62,7 @@ One-tap combos at the top of the panel set a curated mix of effects and slider v
 | liquid | Funhouse fluid warp |
 | bass drop | Datamosh locked to the kick drum (load a track or use the mic) |
 
-Presets are just starting points — tweak any toggle or slider afterward.
+Presets are just starting points — tweak any toggle or slider afterward. All sliders (mosh engine, effect strengths, audio thresholds, hand power, mirror) live under the collapsible **customize** menu in the panel.
 
 ## Audio-reactive (bass mosh)
 
@@ -73,6 +73,12 @@ Two audio sources:
 - **load track** — pick an audio file; it plays through your speakers and drives the effect directly (cleaner than the mic). This auto-enables bass mode.
 
 Tune `bass trigger` to the track: lower if it's not catching the kicks, higher if everything triggers it.
+
+`spectrum` (7) splits the music into three bands, each driving its own visual: **lows** (20–150Hz) keep driving the kick-mosh, **mids** (200Hz–2kHz — vocals/synths) drive a chromatic RGB split whose offset follows the mid energy, and **highs** (4–12kHz — hi-hats/cymbals) fire scanline jitter and a brief flash on each hat onset. The corner meter expands to three bars (LOW/MID/HIGH) so you can watch each band hit. `spectrum amount` scales the mid/high effects.
+
+## Hands
+
+`hands` (8) loads MediaPipe HandLandmarker (~8MB once, needs http/https like precise) and tracks up to two hands, 21 landmarks each. Hand movement drives effects that *only* happen off your hands: moving a hand smears the mosh buffer along its motion (a glitch trail that follows your hand and keeps moshing), fingertips spray neon particles proportional to speed, and a fast fling fires a glitch burst. Fingertips always glow softly so you can see the tracking; turn on `scan` to also get the full hand skeleton in the HUD. `hand power` scales the smear strength. Works on clip sources too.
 
 ## Video-clip sources (transition moshing)
 
@@ -117,6 +123,8 @@ Tune `bass trigger` to the track: lower if it's not catching the kicks, higher i
 | `bass mosh` (0) | Ties the datamosh to the kick drum — a big glitch/freeze/smear fires on the beat, snapping crisp between kicks |
 | `load track` | Play a music file and drive `bass mosh` from it (instead of the mic) |
 | bass trigger | How hard the low end (20–150Hz) must hit to fire a kick |
+| `spectrum` (7) | Full-spectrum audio reactivity — mids drive RGB split, highs drive scanline jitter + flash (see below) |
+| `hands` (8) | Hand tracking — movement smears the mosh, fingertips spray particles (see below) |
 | `+ clip` | Load video clip(s) as additional mosh sources (they play muted on loop) |
 | `src` (9) | Cut between webcam and clips — deliberately **no keyframe**, so the old source's pixels smear under the new source's motion: the classic transition mosh |
 | auto cut | Automatically rotate cam → clip → clip every N seconds for continuous transition moshing |

@@ -91,6 +91,15 @@
     white-space: pre-wrap;
   }
   .sec { color: var(--accent); font-size: 11px; letter-spacing: .12em; text-transform: uppercase; margin: 4px 0 -4px; opacity: .8; }
+  details.menu { border: 1px solid #2a2a33; border-radius: 6px; padding: 0 10px; }
+  details.menu > summary {
+    cursor: pointer; list-style: none; padding: 9px 0;
+    color: var(--accent); font-size: 11px; letter-spacing: .12em; text-transform: uppercase;
+  }
+  details.menu > summary::before { content: '▸ '; }
+  details.menu[open] > summary::before { content: '▾ '; }
+  details.menu > .inner { display: flex; flex-direction: column; gap: 12px; padding: 2px 0 12px; }
+  .subsec { color: var(--dim); font-size: 10px; letter-spacing: .1em; text-transform: uppercase; margin-bottom: -8px; }
   .keys { color: var(--dim); border-top: 1px solid #2a2a33; padding-top: 10px; }
   .keys b { color: var(--ink); font-weight: normal; background: #23232c; padding: 0 5px; border-radius: 3px; }
 </style>
@@ -128,6 +137,7 @@
     <button id="scanBtn" title="Futuristic face-scan HUD overlay">scan</button>
     <button id="dissectBtn" title="Isolate eyes/mouth and spin them">dissect</button>
     <button id="preciseBtn" title="Load MediaPipe FaceMesh for true 468-point landmark tracking (downloads ~4MB once)">precise</button>
+    <button id="handsBtn" title="Track your hands — movement smears the mosh and sprays particles (downloads ~8MB once)">hands</button>
   </div>
 
   <div class="row">
@@ -155,10 +165,6 @@
     <button id="addClipBtn" title="Load video clip(s) to mosh between">+ clip</button>
   </div>
   <input type="file" id="clipFile" accept="video/*" multiple style="display:none">
-  <div class="ctl">
-    <label>auto cut (s) <output id="autoCutV">off</output></label>
-    <input type="range" id="autoCut" min="0" max="10" step="0.5" value="0">
-  </div>
 
   <div class="sec">warp</div>
   <div class="row">
@@ -183,16 +189,17 @@
   <div class="sec">audio-reactive</div>
   <div class="row">
     <button id="bassBtn" title="Datamosh triggered by the kick drum / low end (20–150Hz)">bass mosh</button>
+    <button id="bandBtn" title="Full-spectrum: mids drive RGB split, highs drive scanline jitter + flash">spectrum</button>
     <button id="trackBtn" title="Play a music file and drive the mosh from it">load track</button>
   </div>
   <input type="file" id="trackFile" accept="audio/*" style="display:none">
-  <div class="ctl">
-    <label>bass trigger <output id="bassThreshV">0.40</output></label>
-    <input type="range" id="bassThresh" min="0.1" max="0.85" step="0.05" value="0.4">
-  </div>
 
   <div id="fxStatus" style="color:var(--dim); min-height:1.2em; margin-top:-6px;">tracker: fast (offline)</div>
 
+  <details class="menu">
+    <summary>customize</summary>
+    <div class="inner">
+  <div class="subsec">mosh engine</div>
   <div class="ctl">
     <label>block size <output id="blockV">24</output></label>
     <input type="range" id="block" min="8" max="64" step="4" value="24">
@@ -213,6 +220,7 @@
     <label>auto keyframe (s) <output id="autoKeyV">off</output></label>
     <input type="range" id="autoKey" min="0" max="30" step="1" value="0">
   </div>
+  <div class="subsec">effects</div>
   <div class="ctl">
     <label>orb warp <output id="warpV">1.00</output></label>
     <input type="range" id="warp" min="0.4" max="2.5" step="0.05" value="1">
@@ -277,8 +285,27 @@
     <label>slice delay <output id="sliceDelayV">4</output></label>
     <input type="range" id="sliceDelay" min="1" max="12" step="1" value="4">
   </div>
+  <div class="subsec">audio · sources · hands</div>
+  <div class="ctl">
+    <label>bass trigger <output id="bassThreshV">0.40</output></label>
+    <input type="range" id="bassThresh" min="0.1" max="0.85" step="0.05" value="0.4">
+  </div>
+  <div class="ctl">
+    <label>spectrum amount <output id="bandAmtV">1.0</output></label>
+    <input type="range" id="bandAmt" min="0" max="2" step="0.1" value="1">
+  </div>
+  <div class="ctl">
+    <label>auto cut (s) <output id="autoCutV">off</output></label>
+    <input type="range" id="autoCut" min="0" max="10" step="0.5" value="0">
+  </div>
+  <div class="ctl">
+    <label>hand power <output id="handAmtV">1.0</output></label>
+    <input type="range" id="handAmt" min="0" max="2" step="0.1" value="1">
+  </div>
 
   <label class="check"><input type="checkbox" id="mirror" checked> mirror</label>
+    </div>
+  </details>
 
   <div class="row">
     <button id="recBtn" class="rec">&#9679; record</button>
@@ -292,7 +319,7 @@
     <b>O</b> orb &nbsp; <b>H</b> scan &nbsp; <b>D</b> dissect &nbsp; <b>P</b> precise<br>
     <b>T</b> react &nbsp; <b>I</b> iris &nbsp; <b>W</b> swap<br>
     <b>E</b> gate &nbsp; <b>F</b> echo &nbsp; <b>A</b> ascii &nbsp; <b>L</b> slit<br>
-    <b>9</b> cut source &nbsp; <b>0</b> bass<br>
+    <b>9</b> cut source &nbsp; <b>0</b> bass &nbsp; <b>7</b> spectrum &nbsp; <b>8</b> hands<br>
     <b>R</b> record &nbsp; <b>S</b> snapshot
   </div>
 </div>
@@ -351,7 +378,11 @@ const P = {
   psort: false,  // pixel-sort on blink (precise)
   bass: false,   // datamosh triggered by low-end / kick drums
   bassThresh: 0.4, // kick trigger threshold
+  bandfx: false, // full-spectrum: mids -> RGB split, highs -> jitter/flash
+  bandAmt: 1,    // spectrum effect strength
   autoCut: 0,    // seconds between automatic source cuts (0 = off)
+  hands: false,  // hand tracking drives smears + particles
+  handAmt: 1,    // hand effect strength
 };
 
 const MW = 160;              // motion-estimation width (small grayscale grid)
@@ -416,6 +447,10 @@ const flowCtx = flowCanvas.getContext('2d', { willReadFrequently: true });
 let audioLevel = 0, analyser = null, audioData = null, micOn = false;
 let audioCtx = null, freqData = null, trackEl = null;
 let bassLevel = 0, kickEnv = 0, bassPrev = 0, kickCd = 0;
+let midLevel = 0, highLevel = 0, highPrev = 0, hatEnv = 0, hatCd = 0;
+// tint canvases for the mid-band RGB split
+const tintCanvas = document.createElement('canvas');
+const tintCtx = tintCanvas.getContext('2d');
 // particles (edge explosion) + blink/shake state
 let particles = [];
 let eyeOpenPrev = 1, blinkFire = 0, shakePrev = 0, psortRows = null, psortLife = 0;
@@ -455,7 +490,9 @@ bindSlider('magAmt', 'magAmt', v => v.toFixed(1));
 bindSlider('kaleidoSeg', 'kaleidoSeg', v => v | 0);
 bindSlider('sliceDelay', 'sliceDelay', v => v | 0);
 bindSlider('bassThresh', 'bassThresh', v => v.toFixed(2));
+bindSlider('bandAmt', 'bandAmt', v => v.toFixed(1));
 bindSlider('autoCut', 'autoCut', v => v === 0 ? 'off' : v + 's');
+bindSlider('handAmt', 'handAmt', v => v.toFixed(1));
 $('warp').addEventListener('input', () => { orbMapDirty = true; });
 
 $('mirror').addEventListener('change', e => { P.mirror = e.target.checked; needKeyframe = true; });
@@ -543,6 +580,16 @@ $('bassBtn').addEventListener('click', () => {
   $('bassBtn').classList.toggle('active', P.bass);
   if (P.bass && !micOn) startMic(); // default to mic unless a track is loaded
 });
+$('bandBtn').addEventListener('click', () => {
+  P.bandfx = !P.bandfx;
+  $('bandBtn').classList.toggle('active', P.bandfx);
+  if (P.bandfx && !micOn) startMic();
+});
+$('handsBtn').addEventListener('click', () => {
+  P.hands = !P.hands;
+  $('handsBtn').classList.toggle('active', P.hands);
+  if (P.hands) loadHands();
+});
 $('trackBtn').addEventListener('click', () => $('trackFile').click());
 $('trackFile').addEventListener('change', e => {
   if (e.target.files && e.target.files[0]) loadTrack(e.target.files[0]);
@@ -561,12 +608,13 @@ const BTNS = [['moshBtn', 'mosh'], ['orbBtn', 'orb'], ['scanBtn', 'scan'], ['dis
   ['gateBtn', 'gate'], ['echoBtn', 'echo'], ['asciiBtn', 'ascii'], ['slitBtn', 'slit'],
   ['fluidBtn', 'fluid'], ['cubismBtn', 'cubism'], ['vortexBtn', 'vortex'], ['magEyesBtn', 'magEyes'],
   ['kaleidoBtn', 'kaleido'], ['sliceBtn', 'slice'], ['paintBtn', 'paint'], ['edgeBtn', 'edge'],
-  ['voiceBtn', 'voice'], ['laserBtn', 'laser'], ['psortBtn', 'psort'], ['bassBtn', 'bass']];
+  ['voiceBtn', 'voice'], ['laserBtn', 'laser'], ['psortBtn', 'psort'], ['bassBtn', 'bass'],
+  ['bandBtn', 'bandfx'], ['handsBtn', 'hands']];
 const DEFAULTS = { block: 24, smear: 1.4, bleed: 0.06, chaos: 0, autoKey: 0, warp: 1, spin: 0.05,
   dspeed: 1, blend: 0.9, feather: 0.6, gateThresh: 0.02, echoFade: 0.5, echoSpin: 2, asciiSize: 10,
-  slitSpeed: 2, fluidForce: 1, cubAmt: 1, vortexAmt: 1, magAmt: 1, kaleidoSeg: 8, sliceDelay: 4, bassThresh: 0.4, autoCut: 0 };
+  slitSpeed: 2, fluidForce: 1, cubAmt: 1, vortexAmt: 1, magAmt: 1, kaleidoSeg: 8, sliceDelay: 4, bassThresh: 0.4, autoCut: 0, bandAmt: 1, handAmt: 1 };
 const OFF = ['orb', 'scan', 'dissect', 'react', 'iris', 'swap', 'gate', 'echo', 'ascii', 'slit',
-  'fluid', 'cubism', 'vortex', 'magEyes', 'kaleido', 'slice', 'paint', 'edge', 'voice', 'laser', 'psort', 'bass'];
+  'fluid', 'cubism', 'vortex', 'magEyes', 'kaleido', 'slice', 'paint', 'edge', 'voice', 'laser', 'psort', 'bass', 'bandfx', 'hands'];
 const PRESETS = {
   reset:   {},
   vapor:   { echo: true, echoFade: 0.62, echoSpin: 1.2, orb: true, spin: 0.03, react: true, smear: 1.9, bleed: 0.1 },
@@ -574,7 +622,7 @@ const PRESETS = {
   acid:    { kaleido: true, precise: true, echo: true, echoFade: 0.55, echoSpin: 3, iris: true, react: true, smear: 2.2, kaleidoSeg: 10 },
   cubist:  { cubism: true, react: true, cubAmt: 1.3, smear: 1.6 },
   liquid:  { fluid: true, fluidForce: 1.6, react: true, smear: 1.2, bleed: 0.12 },
-  bassdrop:{ bass: true, smear: 1.6, bassThresh: 0.4 },
+  bassdrop:{ bass: true, bandfx: true, smear: 1.6, bassThresh: 0.4 },
 };
 const PRECISE_KEYS = ['scan', 'dissect', 'iris', 'swap', 'vortex', 'magEyes', 'kaleido', 'laser', 'psort', 'paint'];
 
@@ -593,7 +641,8 @@ function applyPreset(name) {
   syncUI();
   if (P.precise) { $('preciseBtn').classList.add('active'); loadMediaPipe(); }
   if (P.paint) paintReset = true;
-  if (P.bass && !micOn) startMic();
+  if ((P.bass || P.bandfx) && !micOn) startMic();
+  if (P.hands) loadHands();
   if (name === 'reset') setSource(0); // reset returns to the webcam (clips stay loaded)
   setFxStatus(name === 'bassdrop' ? 'bass drop — load a track or allow the mic' : 'preset: ' + name);
 }
@@ -645,6 +694,8 @@ addEventListener('keydown', e => {
     case 'KeyQ': $('psortBtn').click(); break;
     case 'Digit0': $('bassBtn').click(); break;
     case 'Digit9': $('srcBtn').click(); break;
+    case 'Digit8': $('handsBtn').click(); break;
+    case 'Digit7': $('bandBtn').click(); break;
     case 'KeyR': toggleRecord(); break;
     case 'KeyS': snapshot(); break;
   }
@@ -827,7 +878,8 @@ function tick(now) {
     computeFaceMotion(now);
     updateTriggers(now);
   }
-  if (P.voice || P.bass) updateAudio(now);
+  if (P.voice || P.bass || P.bandfx) updateAudio(now);
+  if (P.hands) updateHands(now);
   if (P.fluid) updateFluid();
 
   // motion gate: still frames stay crisp. bass mode: crisp between kicks.
@@ -849,6 +901,7 @@ function tick(now) {
   if (P.iris) applyIris(now);
   if (P.dissect) applyDissect(now);
   // warp composites
+  if (P.hands) applyHandMosh(now);
   if (P.fluid) renderFluid();
   if (P.vortex) applyVortex();
   if (P.magEyes) applyMagEyes();
@@ -868,11 +921,15 @@ function tick(now) {
   else if (P.orb) renderOrb(now);
   else octx.drawImage(fb, 0, 0);
 
+  // audio band post-fx on the final composite
+  if (P.bandfx) { applyRgbSplit(); applyHighJitter(); }
+
   // overlays
   if (P.edge) renderEdge(now);
   updateParticles();
   if (P.laser) renderLaser();
-  if (P.bass) drawBassMeter();
+  if (P.hands) drawHandFx(now);
+  if (P.bass || P.bandfx) drawBassMeter();
 
   if (P.scan && !P.ascii && !P.slit && !P.cubism && !P.kaleido) drawScanHUD(now);
 
@@ -1219,10 +1276,17 @@ function ellipseFromLM(pts, idx, corners) {
   return { cx, cy, rx, ry, rot };
 }
 
-function updateFaceMP(now) {
+// one shared downscaled frame per tick for all MediaPipe detectors
+let _mpFrameStamp = -1;
+function ensureMpFrame() {
   const w = Math.min(W, 640), h = Math.round(w * H / W);
-  if (mpCanvas.width !== w || mpCanvas.height !== h) { mpCanvas.width = w; mpCanvas.height = h; }
-  drawSourceTo(mpCtx, w, h);
+  if (mpCanvas.width !== w || mpCanvas.height !== h) { mpCanvas.width = w; mpCanvas.height = h; _mpFrameStamp = -1; }
+  if (_mpFrameStamp !== frames) { drawSourceTo(mpCtx, w, h); _mpFrameStamp = frames; }
+  return { w, h };
+}
+
+function updateFaceMP(now) {
+  ensureMpFrame();
 
   mpTs = Math.max(mpTs + 1, Math.round(now));
   let res;
@@ -1257,6 +1321,117 @@ function updateFaceMP(now) {
     face.seen = now;
   }
   face.visible = now - face.seen < 700;
+}
+
+// ---------- hands: MediaPipe HandLandmarker (21 landmarks per hand) ----------
+const MP_HAND_URL = MP.handModel || 'https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task';
+let handLandmarker = null, handsLoading = false, handTs = 0;
+let handsList = []; // [{pts×21, cx, cy, vx, vy, speed, size}]
+const handPrev = new Map();
+
+async function loadHands() {
+  if (handLandmarker || handsLoading) return;
+  handsLoading = true;
+  setFxStatus('loading hand tracker… (~8MB, once)');
+  try {
+    await loadMediaPipe();
+    if (!mpReady) throw new Error('vision runtime unavailable');
+    let last;
+    for (const delegate of [MP.delegate || 'GPU', 'CPU']) {
+      try {
+        handLandmarker = await mpVision.HandLandmarker.createFromOptions(mpFileset, {
+          baseOptions: { modelAssetPath: MP_HAND_URL, delegate },
+          runningMode: 'VIDEO', numHands: 2,
+        });
+        last = null; break;
+      } catch (e) { last = e; }
+    }
+    if (last) throw last;
+    setFxStatus('hands ✓ — wave to smear the mosh');
+  } catch (e) {
+    console.error('hands load failed:', e);
+    P.hands = false; $('handsBtn').classList.remove('active');
+    setFxStatus('hands unavailable (offline?)');
+  } finally { handsLoading = false; }
+}
+
+function updateHands(now) {
+  if (!handLandmarker) return;
+  ensureMpFrame();
+  handTs = Math.max(handTs + 1, Math.round(now));
+  let res;
+  try { res = handLandmarker.detectForVideo(mpCanvas, handTs); } catch (e) { return; }
+  const list = [];
+  if (res && res.landmarks) {
+    res.landmarks.forEach((lm, idx) => {
+      const pts = lm.map(p => ({ x: p.x * W, y: p.y * H }));
+      const cx = pts[9].x, cy = pts[9].y; // middle-finger base ≈ palm center
+      const prev = handPrev.get(idx);
+      const vx = prev ? cx - prev.cx : 0, vy = prev ? cy - prev.cy : 0;
+      handPrev.set(idx, { cx, cy });
+      list.push({ pts, cx, cy, vx, vy, speed: Math.hypot(vx, vy), size: Math.hypot(cx - pts[0].x, cy - pts[0].y) });
+    });
+  }
+  handsList = list;
+}
+
+// hand movement smears the feedback buffer (localized mosh that trails
+// your hand) and sprays fingertip particles; fast flings fire glitch bursts
+function applyHandMosh(now) {
+  for (const hd of handsList) {
+    const R = Math.max(30, hd.size * 2.2);
+    if (hd.speed > 2) {
+      const k = 0.6 * P.handAmt, steps = 5;
+      for (let s = 1; s <= steps; s++) {
+        fctx.globalAlpha = 0.5 * (1 - s / (steps + 1));
+        fctx.drawImage(fb, hd.cx - R, hd.cy - R, 2 * R, 2 * R,
+          hd.cx - R + hd.vx * s * k, hd.cy - R + hd.vy * s * k, 2 * R, 2 * R);
+      }
+      fctx.globalAlpha = 1;
+    }
+    if (hd.speed > 6) {
+      for (const t of [4, 8, 12, 16, 20]) {
+        if (Math.random() < 0.5) {
+          particles.push({
+            x: hd.pts[t].x, y: hd.pts[t].y,
+            vx: hd.vx * 0.4 + (Math.random() - 0.5) * 3,
+            vy: hd.vy * 0.4 + (Math.random() - 0.5) * 3 - 1,
+            life: 1, hue: ((now / 10 + t * 30) % 360) | 0,
+          });
+        }
+      }
+    }
+    if (hd.speed > 30) glitchFrames = Math.max(glitchFrames, 6);
+  }
+}
+
+// overlay: fingertip glow always; skeleton when the scan HUD is on
+const HAND_CHAINS = [[0,1,2,3,4],[0,5,6,7,8],[5,9],[9,10,11,12],[9,13],[13,14,15,16],[13,17],[0,17],[17,18,19,20]];
+function drawHandFx(now) {
+  if (!handsList.length) return;
+  octx.save();
+  for (const hd of handsList) {
+    if (P.scan) {
+      octx.strokeStyle = 'rgba(124,242,192,.7)';
+      octx.lineWidth = 1;
+      for (const ch of HAND_CHAINS) {
+        octx.beginPath();
+        ch.forEach((i, n) => n ? octx.lineTo(hd.pts[i].x, hd.pts[i].y) : octx.moveTo(hd.pts[i].x, hd.pts[i].y));
+        octx.stroke();
+      }
+    }
+    octx.globalCompositeOperation = 'lighter';
+    for (const t of [4, 8, 12, 16, 20]) {
+      const p = hd.pts[t];
+      const g = octx.createRadialGradient(p.x, p.y, 0, p.x, p.y, 10);
+      g.addColorStop(0, 'rgba(124,242,192,.8)');
+      g.addColorStop(1, 'rgba(124,242,192,0)');
+      octx.fillStyle = g;
+      octx.beginPath(); octx.arc(p.x, p.y, 10, 0, Math.PI * 2); octx.fill();
+    }
+    octx.globalCompositeOperation = 'source-over';
+  }
+  octx.restore();
 }
 
 function updateFace(now) {
@@ -2077,13 +2252,18 @@ async function loadTrack(file) {
     setFxStatus('track: ' + file.name);
   } catch (e) { console.error('track error:', e); setFxStatus('could not play that track'); }
 }
-function computeBass() {
-  analyser.getByteFrequencyData(freqData);
+function bandEnergy(loHz, hiHz) {
   const bw = (audioCtx.sampleRate / 2) / freqData.length;   // Hz per bin
-  const lo = Math.max(1, Math.floor(20 / bw)), hi = Math.min(freqData.length - 1, Math.ceil(150 / bw));
+  const lo = Math.max(1, Math.floor(loHz / bw)), hi = Math.min(freqData.length - 1, Math.ceil(hiHz / bw));
   let s = 0;
   for (let i = lo; i <= hi; i++) s += freqData[i];
-  bassLevel = s / ((hi - lo + 1) * 255);
+  return s / ((hi - lo + 1) * 255);
+}
+function computeBands() {
+  analyser.getByteFrequencyData(freqData);
+  bassLevel = bandEnergy(20, 150);          // kick drums
+  midLevel = bandEnergy(200, 2000);         // vocals / synths / snare body
+  highLevel = Math.min(1, bandEnergy(4000, 12000) * 2.2); // hi-hats / cymbals (boosted: less energy up there)
 }
 function updateAudio(now) {
   if (!analyser) { audioLevel *= 0.9; kickEnv *= 0.85; return; }
@@ -2092,26 +2272,76 @@ function updateAudio(now) {
   for (let i = 0; i < audioData.length; i++) { const v = (audioData[i] - 128) / 128; sum += v * v; }
   audioLevel += (Math.min(1, Math.sqrt(sum / audioData.length) * 3.5) - audioLevel) * 0.35;
   if (P.voice && audioLevel > 0.55 && now > _glCd) { glitchFrames = Math.max(glitchFrames, 8); _glCd = now + 220; }
-  // bass / kick detection
-  if (P.bass) {
-    computeBass();
-    if (bassLevel > P.bassThresh && bassLevel > bassPrev * 1.04 && now > kickCd) {
+  // band analysis: lows -> kick mosh, mids -> RGB split, highs -> jitter
+  if (P.bass || P.bandfx) {
+    computeBands();
+    if (P.bass && bassLevel > P.bassThresh && bassLevel > bassPrev * 1.04 && now > kickCd) {
       kickEnv = 1; kickCd = now + 110;                       // one trigger per kick
       glitchFrames = Math.max(glitchFrames, 16);             // massive glitch on the beat
     }
     bassPrev = bassLevel;
+    if (P.bandfx && highLevel > 0.28 && highLevel > highPrev * 1.2 && now > hatCd) {
+      hatEnv = 1; hatCd = now + 90;                          // hi-hat onset
+    }
+    highPrev = highLevel;
   }
   kickEnv *= 0.85;                                           // smear settles back between kicks
+  hatEnv *= 0.75;
+}
+
+// mids -> chromatic RGB split of the final composite
+function applyRgbSplit() {
+  const amt = midLevel * P.bandAmt;
+  if (amt < 0.04) return;
+  if (tintCanvas.width !== W || tintCanvas.height !== H) { tintCanvas.width = W; tintCanvas.height = H; }
+  const off = 2 + amt * 26;
+  for (const [color, dx] of [['#f00', -off], ['#00f', off]]) {
+    tintCtx.globalCompositeOperation = 'source-over';
+    tintCtx.drawImage(out, 0, 0);
+    tintCtx.globalCompositeOperation = 'multiply';
+    tintCtx.fillStyle = color;
+    tintCtx.fillRect(0, 0, W, H);
+    octx.save();
+    octx.globalCompositeOperation = 'lighter';
+    octx.globalAlpha = Math.min(0.8, 0.25 + amt);
+    octx.drawImage(tintCanvas, dx, 0);
+    octx.restore();
+  }
+}
+
+// highs -> scanline jitter + flash on hi-hat hits
+function applyHighJitter() {
+  const e = hatEnv * P.bandAmt;
+  if (e < 0.08) return;
+  for (let i = 0; i < 7; i++) {
+    const y = (prand(i * 31.7 + frames) * H) | 0;
+    const h = 2 + prand(i * 7.3 + frames) * 12;
+    const dx = (prand(i * 13.1 + frames) - 0.5) * 90 * e;
+    octx.drawImage(out, 0, y, W, h, dx, y, W, h);
+  }
+  octx.fillStyle = 'rgba(255,255,255,' + (0.18 * e) + ')';
+  octx.fillRect(0, 0, W, H);
 }
 function drawBassMeter() {
-  const x = 12, y = H - 22, w = W * 0.42, h = 10;
+  const x = 12, w = W * 0.42, h = 7;
+  const bands = P.bandfx
+    ? [['LOW', bassLevel, kickEnv > 0.5], ['MID', midLevel, false], ['HIGH', highLevel, hatEnv > 0.5]]
+    : [['BASS', bassLevel, kickEnv > 0.5]];
+  const y0 = H - 10 - bands.length * (h + 9);
   octx.save();
-  octx.fillStyle = 'rgba(0,0,0,.45)'; octx.fillRect(x - 3, y - 3, w + 6, h + 6);
-  octx.fillStyle = 'rgba(124,242,192,.85)'; octx.fillRect(x, y, w * Math.min(1, bassLevel), h);
-  octx.fillStyle = kickEnv > 0.5 ? '#ff5f8f' : '#7cf2c0';
-  octx.fillRect(x + w * P.bassThresh - 1, y - 2, 2, h + 4);  // threshold marker
-  octx.fillStyle = '#fff'; octx.font = '10px ui-monospace, monospace'; octx.textBaseline = 'top';
-  octx.fillText('BASS' + (kickEnv > 0.5 ? ' ● KICK' : ''), x, y - 14);
+  octx.fillStyle = 'rgba(0,0,0,.45)';
+  octx.fillRect(x - 3, y0 - 13, w + 6, bands.length * (h + 9) + 10);
+  octx.font = '9px ui-monospace, monospace'; octx.textBaseline = 'top';
+  bands.forEach(([name, lvl, hit], i) => {
+    const y = y0 + i * (h + 9);
+    octx.fillStyle = hit ? '#ff5f8f' : 'rgba(124,242,192,.85)';
+    octx.fillRect(x + 28, y, (w - 28) * Math.min(1, lvl), h);
+    if (i === 0 && P.bass) { // kick threshold marker on the low band
+      octx.fillRect(x + 28 + (w - 28) * P.bassThresh - 1, y - 2, 2, h + 4);
+    }
+    octx.fillStyle = '#fff';
+    octx.fillText(name + (hit ? '●' : ''), x, y - 1);
+  });
   octx.restore();
 }
 
@@ -2174,6 +2404,8 @@ window._dbg = () => ({
   oval: FACE_OVAL ? FACE_OVAL.length : 0, tris: TRIANGLES ? TRIANGLES.length : 0,
   gate: P.gate, gmMotion: +gmMotion.toFixed(4), echo: P.echo, ascii: P.ascii, slit: P.slit,
   bass: P.bass, bassLevel: +bassLevel.toFixed(3), kickEnv: +kickEnv.toFixed(3),
+  bandfx: P.bandfx, mid: +midLevel.toFixed(3), high: +highLevel.toFixed(3), hatEnv: +hatEnv.toFixed(3),
+  hands: P.hands, handCount: handsList.length, handSpeed: handsList.length ? +handsList[0].speed.toFixed(1) : 0,
   src: srcIndex, clips: clips.length, autoCut: P.autoCut,
 });
 window._getMaps = () => faceMaps; // debug: current source faces
