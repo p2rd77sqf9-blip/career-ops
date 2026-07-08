@@ -74,6 +74,10 @@ Two audio sources:
 
 Tune `bass trigger` to the track: lower if it's not catching the kicks, higher if everything triggers it.
 
+## Video-clip sources (transition moshing)
+
+`+ clip` loads one or more video files alongside the webcam (clips play muted on loop; audio stays with the mic/track so bass mosh keeps working). The `src` button (or `9`) cuts between cam and clips — and the cut intentionally does **not** insert a keyframe. The feedback buffer keeps the old source's pixels while the new source's motion vectors drag them around, which is precisely the shot-transition effect that made datamoshing famous. Press Space if you want a clean cut instead. `auto cut` rotates through cam → clip → clip on a timer for continuous transition mosh; everything else (face effects, orb, bass, presets) works the same on whichever source is live — face tracking will even lock onto faces *in the clip*.
+
 ## Controls
 
 | Control | Effect |
@@ -113,6 +117,9 @@ Tune `bass trigger` to the track: lower if it's not catching the kicks, higher i
 | `bass mosh` (0) | Ties the datamosh to the kick drum — a big glitch/freeze/smear fires on the beat, snapping crisp between kicks |
 | `load track` | Play a music file and drive `bass mosh` from it (instead of the mic) |
 | bass trigger | How hard the low end (20–150Hz) must hit to fire a kick |
+| `+ clip` | Load video clip(s) as additional mosh sources (they play muted on loop) |
+| `src` (9) | Cut between webcam and clips — deliberately **no keyframe**, so the old source's pixels smear under the new source's motion: the classic transition mosh |
+| auto cut | Automatically rotate cam → clip → clip every N seconds for continuous transition moshing |
 | fluid force / cubism amt / vortex amt / eye magnify | Strength of each warp |
 | kaleido segments / slice delay | Kaleidoscope mirror count / frames of delay per strip |
 | orb warp | Radial curve of the orb — low = rim-heavy fisheye, high = pinched center |

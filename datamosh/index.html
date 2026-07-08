@@ -149,6 +149,17 @@
     <button id="slitBtn" title="Slit-scan time smear">slit</button>
   </div>
 
+  <div class="sec">sources</div>
+  <div class="row">
+    <button id="srcBtn" title="Cycle source — the mosh smears through the cut (no keyframe)">src: cam</button>
+    <button id="addClipBtn" title="Load video clip(s) to mosh between">+ clip</button>
+  </div>
+  <input type="file" id="clipFile" accept="video/*" multiple style="display:none">
+  <div class="ctl">
+    <label>auto cut (s) <output id="autoCutV">off</output></label>
+    <input type="range" id="autoCut" min="0" max="10" step="0.5" value="0">
+  </div>
+
   <div class="sec">warp</div>
   <div class="row">
     <button id="fluidBtn" title="Funhouse fluid — head motion pushes pixels like liquid">fluid</button>
@@ -281,7 +292,8 @@
     <b>O</b> orb &nbsp; <b>H</b> scan &nbsp; <b>D</b> dissect &nbsp; <b>P</b> precise<br>
     <b>T</b> react &nbsp; <b>I</b> iris &nbsp; <b>W</b> swap<br>
     <b>E</b> gate &nbsp; <b>F</b> echo &nbsp; <b>A</b> ascii &nbsp; <b>L</b> slit<br>
-    <b>0</b> bass &nbsp; <b>R</b> record &nbsp; <b>S</b> snapshot
+    <b>9</b> cut source &nbsp; <b>0</b> bass<br>
+    <b>R</b> record &nbsp; <b>S</b> snapshot
   </div>
 </div>
 
@@ -339,6 +351,7 @@ const P = {
   psort: false,  // pixel-sort on blink (precise)
   bass: false,   // datamosh triggered by low-end / kick drums
   bassThresh: 0.4, // kick trigger threshold
+  autoCut: 0,    // seconds between automatic source cuts (0 = off)
 };
 
 const MW = 160;              // motion-estimation width (small grayscale grid)
@@ -442,6 +455,7 @@ bindSlider('magAmt', 'magAmt', v => v.toFixed(1));
 bindSlider('kaleidoSeg', 'kaleidoSeg', v => v | 0);
 bindSlider('sliceDelay', 'sliceDelay', v => v | 0);
 bindSlider('bassThresh', 'bassThresh', v => v.toFixed(2));
+bindSlider('autoCut', 'autoCut', v => v === 0 ? 'off' : v + 's');
 $('warp').addEventListener('input', () => { orbMapDirty = true; });
 
 $('mirror').addEventListener('change', e => { P.mirror = e.target.checked; needKeyframe = true; });
@@ -534,6 +548,12 @@ $('trackFile').addEventListener('change', e => {
   if (e.target.files && e.target.files[0]) loadTrack(e.target.files[0]);
   e.target.value = '';
 });
+$('srcBtn').addEventListener('click', () => setSource((srcIndex + 1) % (clips.length + 1)));
+$('addClipBtn').addEventListener('click', () => $('clipFile').click());
+$('clipFile').addEventListener('change', e => {
+  if (e.target.files && e.target.files.length) loadClips(e.target.files);
+  e.target.value = '';
+});
 
 // ---------- presets ----------
 const BTNS = [['moshBtn', 'mosh'], ['orbBtn', 'orb'], ['scanBtn', 'scan'], ['dissectBtn', 'dissect'],
@@ -544,7 +564,7 @@ const BTNS = [['moshBtn', 'mosh'], ['orbBtn', 'orb'], ['scanBtn', 'scan'], ['dis
   ['voiceBtn', 'voice'], ['laserBtn', 'laser'], ['psortBtn', 'psort'], ['bassBtn', 'bass']];
 const DEFAULTS = { block: 24, smear: 1.4, bleed: 0.06, chaos: 0, autoKey: 0, warp: 1, spin: 0.05,
   dspeed: 1, blend: 0.9, feather: 0.6, gateThresh: 0.02, echoFade: 0.5, echoSpin: 2, asciiSize: 10,
-  slitSpeed: 2, fluidForce: 1, cubAmt: 1, vortexAmt: 1, magAmt: 1, kaleidoSeg: 8, sliceDelay: 4, bassThresh: 0.4 };
+  slitSpeed: 2, fluidForce: 1, cubAmt: 1, vortexAmt: 1, magAmt: 1, kaleidoSeg: 8, sliceDelay: 4, bassThresh: 0.4, autoCut: 0 };
 const OFF = ['orb', 'scan', 'dissect', 'react', 'iris', 'swap', 'gate', 'echo', 'ascii', 'slit',
   'fluid', 'cubism', 'vortex', 'magEyes', 'kaleido', 'slice', 'paint', 'edge', 'voice', 'laser', 'psort', 'bass'];
 const PRESETS = {
@@ -574,6 +594,7 @@ function applyPreset(name) {
   if (P.precise) { $('preciseBtn').classList.add('active'); loadMediaPipe(); }
   if (P.paint) paintReset = true;
   if (P.bass && !micOn) startMic();
+  if (name === 'reset') setSource(0); // reset returns to the webcam (clips stay loaded)
   setFxStatus(name === 'bassdrop' ? 'bass drop — load a track or allow the mic' : 'preset: ' + name);
 }
 document.querySelectorAll('[data-preset]').forEach(b => {
@@ -623,6 +644,7 @@ addEventListener('keydown', e => {
     case 'KeyZ': $('laserBtn').click(); break;
     case 'KeyQ': $('psortBtn').click(); break;
     case 'Digit0': $('bassBtn').click(); break;
+    case 'Digit9': $('srcBtn').click(); break;
     case 'KeyR': toggleRecord(); break;
     case 'KeyS': snapshot(); break;
   }
@@ -681,21 +703,68 @@ function setupSizes(w, h) {
   needKeyframe = true;
 }
 
-// draw current webcam frame onto a context, honoring mirror
-function drawFrame(ctx, alpha) {
+// ---------- sources: webcam + loaded video clips ----------
+// Switching source deliberately does NOT keyframe — the feedback buffer
+// keeps the old source's pixels while the new source's motion vectors
+// drag them around. That transition IS the classic datamosh.
+let clips = [];      // loaded <video> elements
+let srcIndex = 0;    // 0 = webcam, 1..n = clips[srcIndex-1]
+let lastCut = 0;
+
+function activeSrc() {
+  return (srcIndex > 0 && clips[srcIndex - 1]) ? clips[srcIndex - 1] : video;
+}
+
+// draw the active source covering w×h (mirror applies to webcam only)
+function drawSourceTo(ctx, w, h) {
+  const el = activeSrc();
   ctx.save();
-  ctx.globalAlpha = alpha;
-  if (P.mirror) { ctx.translate(W, 0); ctx.scale(-1, 1); }
-  ctx.drawImage(video, 0, 0, W, H);
+  if (el === video && P.mirror) { ctx.translate(w, 0); ctx.scale(-1, 1); }
+  const vw = el.videoWidth || w, vh = el.videoHeight || h;
+  const s = Math.max(w / vw, h / vh); // cover-crop, preserves aspect
+  ctx.drawImage(el, (w - vw * s) / 2, (h - vh * s) / 2, vw * s, vh * s);
   ctx.restore();
+}
+
+function setSource(i) {
+  srcIndex = Math.max(0, Math.min(clips.length, i));
+  const el = activeSrc();
+  if (el !== video && el.paused) el.play().catch(() => {});
+  $('srcBtn').textContent = srcIndex === 0 ? 'src: cam' : 'src: clip ' + srcIndex + '/' + clips.length;
+  $('srcBtn').classList.toggle('active', srcIndex > 0);
+  // no keyframe here — mosh through the cut
+}
+
+async function loadClips(files) {
+  let added = 0;
+  for (const file of files) {
+    try {
+      const v = document.createElement('video');
+      v.src = URL.createObjectURL(file);
+      v.muted = true; v.loop = true; v.playsInline = true;
+      await v.play();
+      clips.push(v);
+      added++;
+    } catch (e) { console.error('clip error:', e); }
+  }
+  if (added) {
+    setSource(clips.length); // jump straight into the new clip = instant transition mosh
+    setFxStatus('clip loaded — 9 or src button cuts between cam & clips');
+  } else {
+    setFxStatus('could not play that clip');
+  }
+}
+
+// draw current frame of the active source, honoring mirror
+function drawFrame(ctx, alpha) {
+  ctx.globalAlpha = alpha;
+  drawSourceTo(ctx, W, H);
+  ctx.globalAlpha = 1;
 }
 
 // ---------- motion estimation (block matching on small grayscale) ----------
 function readGray(dst) {
-  sctx.save();
-  if (P.mirror) { sctx.translate(MW, 0); sctx.scale(-1, 1); }
-  sctx.drawImage(video, 0, 0, MW, MH);
-  sctx.restore();
+  drawSourceTo(sctx, MW, MH);
   const d = sctx.getImageData(0, 0, MW, MH).data;
   for (let i = 0, j = 0; j < dst.length; i += 4, j++) {
     dst[j] = (d[i] * 3 + d[i + 1] * 4 + d[i + 2]) >> 3;
@@ -743,7 +812,13 @@ let frames = 0, lastFps = performance.now();
 
 function tick(now) {
   requestAnimationFrame(tick);
-  if (!camReady || video.readyState < 2) return;
+  if (!camReady || activeSrc().readyState < 2) return;
+
+  // auto cut: rotate cam -> clip1 -> clip2 -> ... for continuous transition mosh
+  if (P.autoCut > 0 && clips.length && now - lastCut > P.autoCut * 1000) {
+    lastCut = now;
+    setSource((srcIndex + 1) % (clips.length + 1));
+  }
 
   // face tracking first, so react can drive this frame's mosh intensity
   if (P.scan || P.dissect || P.iris || P.swap || P.faceMap || P.react ||
@@ -1147,10 +1222,7 @@ function ellipseFromLM(pts, idx, corners) {
 function updateFaceMP(now) {
   const w = Math.min(W, 640), h = Math.round(w * H / W);
   if (mpCanvas.width !== w || mpCanvas.height !== h) { mpCanvas.width = w; mpCanvas.height = h; }
-  mpCtx.save();
-  if (P.mirror) { mpCtx.translate(w, 0); mpCtx.scale(-1, 1); }
-  mpCtx.drawImage(video, 0, 0, w, h);
-  mpCtx.restore();
+  drawSourceTo(mpCtx, w, h);
 
   mpTs = Math.max(mpTs + 1, Math.round(now));
   let res;
@@ -1196,10 +1268,7 @@ function updateFace(now) {
     detCanvas.width = DETW; detCanvas.height = detH;
     detGray = new Uint8Array(DETW * detH);
   }
-  detCtx.save();
-  if (P.mirror) { detCtx.translate(DETW, 0); detCtx.scale(-1, 1); }
-  detCtx.drawImage(video, 0, 0, DETW, detH);
-  detCtx.restore();
+  drawSourceTo(detCtx, DETW, detH);
   const d = detCtx.getImageData(0, 0, DETW, detH).data;
   for (let i = 0, j = 0; j < detGray.length; i += 4, j++)
     detGray[j] = (d[i] * 3 + d[i + 1] * 4 + d[i + 2]) >> 3;
@@ -1275,10 +1344,7 @@ let _featStamp = -1;
 function ensureFeatSrc() {
   if (_featStamp === frames) return;
   if (featSrc.width !== W || featSrc.height !== H) { featSrc.width = W; featSrc.height = H; }
-  featCtx.save();
-  if (P.mirror) { featCtx.translate(W, 0); featCtx.scale(-1, 1); }
-  featCtx.drawImage(video, 0, 0, W, H);
-  featCtx.restore();
+  drawSourceTo(featCtx, W, H);
   _featStamp = frames;
 }
 
@@ -1625,7 +1691,7 @@ function drawScanHUD(now) {
 function globalMotion() {
   const gw = 80, gh = Math.max(1, Math.round(80 * H / W));
   if (gmCanvas.width !== gw || gmCanvas.height !== gh) { gmCanvas.width = gw; gmCanvas.height = gh; gmPrev = null; }
-  gmCtx.drawImage(video, 0, 0, gw, gh);
+  drawSourceTo(gmCtx, gw, gh);
   const d = gmCtx.getImageData(0, 0, gw, gh).data;
   const n = gw * gh;
   if (!gmPrev || gmPrev.length !== n) {
@@ -1763,10 +1829,7 @@ function applyMagEyes() {
 
 // funhouse fluid: optical-flow displacement that settles back
 function updateFluid() {
-  flowCtx.save();
-  if (P.mirror) { flowCtx.translate(FLW, 0); flowCtx.scale(-1, 1); }
-  flowCtx.drawImage(video, 0, 0, FLW, flh);
-  flowCtx.restore();
+  drawSourceTo(flowCtx, FLW, flh);
   const d = flowCtx.getImageData(0, 0, FLW, flh).data, n = FLW * flh;
   const g = new Float32Array(n);
   for (let i = 0, j = 0; j < n; i += 4, j++) g[j] = d[i] * 0.299 + d[i + 1] * 0.587 + d[i + 2] * 0.114;
@@ -2111,6 +2174,7 @@ window._dbg = () => ({
   oval: FACE_OVAL ? FACE_OVAL.length : 0, tris: TRIANGLES ? TRIANGLES.length : 0,
   gate: P.gate, gmMotion: +gmMotion.toFixed(4), echo: P.echo, ascii: P.ascii, slit: P.slit,
   bass: P.bass, bassLevel: +bassLevel.toFixed(3), kickEnv: +kickEnv.toFixed(3),
+  src: srcIndex, clips: clips.length, autoCut: P.autoCut,
 });
 window._getMaps = () => faceMaps; // debug: current source faces
 startCamera();
